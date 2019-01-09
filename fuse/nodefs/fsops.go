@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hanwen/go-fuse/fuse"
+	"github.com/nekojarashi/go-fuse/fuse"
 )
 
 // Returns the RawFileSystem so it can be mounted.

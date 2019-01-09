@@ -74,11 +74,11 @@
 // raw FUSE protocol. Additionally packages nodefs and pathfs provide ways to
 // implement filesystem at higher levels:
 //
-// Package github.com/hanwen/go-fuse/fuse/nodefs provides way to implement
+// Package github.com/nekojarashi/go-fuse/fuse/nodefs provides way to implement
 // filesystems in terms of inodes. This resembles kernel's idea of what a
 // filesystem looks like.
 //
-// Package github.com/hanwen/go-fuse/fuse/pathfs provides way to implement
+// Package github.com/nekojarashi/go-fuse/fuse/pathfs provides way to implement
 // filesystems in terms of path names. Working with path names is somewhat
 // easier compared to inodes, however renames can be racy. Do not use pathfs if
 // you care about correctness.

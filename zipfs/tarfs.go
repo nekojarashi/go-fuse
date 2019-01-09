@@ -9,7 +9,7 @@ import (
 	"bytes"
 	"compress/bzip2"
 	"compress/gzip"
-	"github.com/hanwen/go-fuse/fuse"
+	"github.com/nekojarashi/go-fuse/fuse"
 	"io"
 	"os"
 	"strings"
