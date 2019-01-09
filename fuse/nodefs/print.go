@@ -7,7 +7,7 @@ package nodefs
 import (
 	"fmt"
 
-	"github.com/hanwen/go-fuse/fuse"
+	"github.com/nekojarashi/go-fuse/fuse"
 )
 
 // String provides a debug string for the given file.

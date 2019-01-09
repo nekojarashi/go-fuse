@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/hanwen/go-fuse/fuse"
-	"github.com/hanwen/go-fuse/fuse/nodefs"
+	"github.com/nekojarashi/go-fuse/fuse"
+	"github.com/nekojarashi/go-fuse/fuse/nodefs"
 )
 
 type ZipFile struct {

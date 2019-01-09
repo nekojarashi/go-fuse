@@ -10,9 +10,9 @@ import (
 	"flag"
 	"log"
 
-	"github.com/hanwen/go-fuse/fuse"
-	"github.com/hanwen/go-fuse/fuse/nodefs"
-	"github.com/hanwen/go-fuse/fuse/pathfs"
+	"github.com/nekojarashi/go-fuse/fuse"
+	"github.com/nekojarashi/go-fuse/fuse/nodefs"
+	"github.com/nekojarashi/go-fuse/fuse/pathfs"
 )
 
 type HelloFs struct {

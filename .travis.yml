@@ -1,7 +1,7 @@
 sudo: required
 
 language: go
-go_import_path: github.com/hanwen/go-fuse
+go_import_path: github.com/nekojarashi/go-fuse
 
 go:
   - 1.9.x

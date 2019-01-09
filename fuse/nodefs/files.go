@@ -10,7 +10,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/hanwen/go-fuse/fuse"
+	"github.com/nekojarashi/go-fuse/fuse"
 )
 
 // DataFile is for implementing read-only filesystems.  This
