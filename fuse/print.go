@@ -28,27 +28,31 @@ func init() {
 		READ_LOCKOWNER: "LOCKOWNER",
 	}
 	initFlagNames = map[int64]string{
-		CAP_ASYNC_READ:       "ASYNC_READ",
-		CAP_POSIX_LOCKS:      "POSIX_LOCKS",
-		CAP_FILE_OPS:         "FILE_OPS",
-		CAP_ATOMIC_O_TRUNC:   "ATOMIC_O_TRUNC",
-		CAP_EXPORT_SUPPORT:   "EXPORT_SUPPORT",
-		CAP_BIG_WRITES:       "BIG_WRITES",
-		CAP_DONT_MASK:        "DONT_MASK",
-		CAP_SPLICE_WRITE:     "SPLICE_WRITE",
-		CAP_SPLICE_MOVE:      "SPLICE_MOVE",
-		CAP_SPLICE_READ:      "SPLICE_READ",
-		CAP_FLOCK_LOCKS:      "FLOCK_LOCKS",
-		CAP_IOCTL_DIR:        "IOCTL_DIR",
-		CAP_AUTO_INVAL_DATA:  "AUTO_INVAL_DATA",
-		CAP_READDIRPLUS:      "READDIRPLUS",
-		CAP_READDIRPLUS_AUTO: "READDIRPLUS_AUTO",
-		CAP_ASYNC_DIO:        "ASYNC_DIO",
-		CAP_WRITEBACK_CACHE:  "WRITEBACK_CACHE",
-		CAP_NO_OPEN_SUPPORT:  "NO_OPEN_SUPPORT",
-		CAP_PARALLEL_DIROPS:  "CAP_PARALLEL_DIROPS",
-		CAP_POSIX_ACL:        "CAP_POSIX_ACL",
-		CAP_HANDLE_KILLPRIV:  "CAP_PARALLEL_DIROPS",
+		CAP_ASYNC_READ:         "ASYNC_READ",
+		CAP_POSIX_LOCKS:        "POSIX_LOCKS",
+		CAP_FILE_OPS:           "FILE_OPS",
+		CAP_ATOMIC_O_TRUNC:     "ATOMIC_O_TRUNC",
+		CAP_EXPORT_SUPPORT:     "EXPORT_SUPPORT",
+		CAP_BIG_WRITES:         "BIG_WRITES",
+		CAP_DONT_MASK:          "DONT_MASK",
+		CAP_SPLICE_WRITE:       "SPLICE_WRITE",
+		CAP_SPLICE_MOVE:        "SPLICE_MOVE",
+		CAP_SPLICE_READ:        "SPLICE_READ",
+		CAP_FLOCK_LOCKS:        "FLOCK_LOCKS",
+		CAP_IOCTL_DIR:          "IOCTL_DIR",
+		CAP_AUTO_INVAL_DATA:    "AUTO_INVAL_DATA",
+		CAP_READDIRPLUS:        "READDIRPLUS",
+		CAP_READDIRPLUS_AUTO:   "READDIRPLUS_AUTO",
+		CAP_ASYNC_DIO:          "ASYNC_DIO",
+		CAP_WRITEBACK_CACHE:    "WRITEBACK_CACHE",
+		CAP_NO_OPEN_SUPPORT:    "NO_OPEN_SUPPORT",
+		CAP_PARALLEL_DIROPS:    "PARALLEL_DIROPS",
+		CAP_POSIX_ACL:          "POSIX_ACL",
+		CAP_HANDLE_KILLPRIV:    "HANDLE_KILLPRIV",
+		CAP_ABORT_ERROR:        "ABORT_ERROR",
+		CAP_MAX_PAGES:          "MAX_PAGES",
+		CAP_CACHE_SYMLINKS:     "CACHE_SYMLINKS",
+		CAP_NO_OPENDIR_SUPPORT: "NO_OPENDIR_SUPPORT",
 	}
 	releaseFlagNames = map[int64]string{
 		RELEASE_FLUSH: "FLUSH",
@@ -111,8 +115,12 @@ func (me *MkdirIn) string() string {
 	return fmt.Sprintf("{0%o (0%o)}", me.Mode, me.Umask)
 }
 
+func (me *Rename1In) string() string {
+	return fmt.Sprintf("{i%d}", me.Newdir)
+}
+
 func (me *RenameIn) string() string {
-	return fmt.Sprintf("{%d}", me.Newdir)
+	return fmt.Sprintf("{i%d %x}", me.Newdir, me.Flags)
 }
 
 func (me *SetAttrIn) string() string {
@@ -124,7 +132,7 @@ func (me *SetAttrIn) string() string {
 		s = append(s, fmt.Sprintf("uid %d", me.Uid))
 	}
 	if me.Valid&FATTR_GID != 0 {
-		s = append(s, fmt.Sprintf("uid %d", me.Gid))
+		s = append(s, fmt.Sprintf("gid %d", me.Gid))
 	}
 	if me.Valid&FATTR_SIZE != 0 {
 		s = append(s, fmt.Sprintf("size %d", me.Size))
@@ -198,19 +206,24 @@ func (me *FlushIn) string() string {
 
 func (me *AttrOut) string() string {
 	return fmt.Sprintf(
-		"{A%d.%09d %v}",
-		me.AttrValid, me.AttrValidNsec, &me.Attr)
+		"{tA=%gs %v}",
+		ft(me.AttrValid, me.AttrValidNsec), &me.Attr)
+}
+
+// ft converts (seconds , nanoseconds) -> float(seconds)
+func ft(tsec uint64, tnsec uint32) float64 {
+	return float64(tsec) + float64(tnsec)*1E-9
 }
 
 // Returned by LOOKUP
 func (me *EntryOut) string() string {
-	return fmt.Sprintf("{NodeId: %d Generation=%d EntryValid=%d.%03d AttrValid=%d.%03d Attr=%v}",
-		me.NodeId, me.Generation, me.EntryValid, me.EntryValidNsec/1000000,
-		me.AttrValid, me.AttrValidNsec/1000000, &me.Attr)
+	return fmt.Sprintf("{i%d g%d tE=%gs tA=%gs %v}",
+		me.NodeId, me.Generation, ft(me.EntryValid, me.EntryValidNsec),
+		ft(me.AttrValid, me.AttrValidNsec), &me.Attr)
 }
 
 func (me *CreateOut) string() string {
-	return fmt.Sprintf("{NodeId: %d Generation=%d %v %v}", me.NodeId, me.Generation, &me.EntryOut, &me.OpenOut)
+	return fmt.Sprintf("{i%d g%d %v %v}", me.NodeId, me.Generation, &me.EntryOut, &me.OpenOut)
 }
 
 func (me *StatfsOut) string() string {
@@ -221,31 +234,31 @@ func (me *StatfsOut) string() string {
 }
 
 func (o *NotifyInvalEntryOut) string() string {
-	return fmt.Sprintf("{parent %d sz %d}", o.Parent, o.NameLen)
+	return fmt.Sprintf("{parent i%d sz %d}", o.Parent, o.NameLen)
 }
 
 func (o *NotifyInvalInodeOut) string() string {
-	return fmt.Sprintf("{ino %d off %d sz %d}", o.Ino, o.Off, o.Length)
+	return fmt.Sprintf("{i%d [%d +%d)}", o.Ino, o.Off, o.Length)
 }
 
 func (o *NotifyInvalDeleteOut) string() string {
-	return fmt.Sprintf("{parent %d ch %d sz %d}", o.Parent, o.Child, o.NameLen)
+	return fmt.Sprintf("{parent i%d ch i%d sz %d}", o.Parent, o.Child, o.NameLen)
 }
 
 func (o *NotifyStoreOut) string() string {
-	return fmt.Sprintf("{nodeid %d off %d sz %d}", o.Nodeid, o.Offset, o.Size)
+	return fmt.Sprintf("{i%d [%d +%d)}", o.Nodeid, o.Offset, o.Size)
 }
 
 func (o *NotifyRetrieveOut) string() string {
-	return fmt.Sprintf("{notifyUnique %d nodeid %d off %d sz %d}", o.NotifyUnique, o.Nodeid, o.Offset, o.Size)
+	return fmt.Sprintf("{> %d: i%d [%d +%d)}", o.NotifyUnique, o.Nodeid, o.Offset, o.Size)
 }
 
 func (i *NotifyRetrieveIn) string() string {
-	return fmt.Sprintf("{off %d sz %d}", i.Offset, i.Size)
+	return fmt.Sprintf("{[%d +%d)}", i.Offset, i.Size)
 }
 
 func (f *FallocateIn) string() string {
-	return fmt.Sprintf("{Fh %d off %d sz %d mod 0%o}",
+	return fmt.Sprintf("{Fh %d [%d +%d) mod 0%o}",
 		f.Fh, f.Offset, f.Length, f.Mode)
 }
 

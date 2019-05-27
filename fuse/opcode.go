@@ -6,6 +6,7 @@ package fuse
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"reflect"
 	"runtime"
@@ -55,7 +56,7 @@ const (
 	_OP_BATCH_FORGET = int32(42)
 	_OP_FALLOCATE    = int32(43) // protocol version 19.
 	_OP_READDIRPLUS  = int32(44) // protocol version 21.
-	_OP_FUSE_RENAME2 = int32(45) // protocol version 23.
+	_OP_RENAME2      = int32(45) // protocol version 23.
 
 	// The following entries don't have to be compatible across Go-FUSE versions.
 	_OP_NOTIFY_INVAL_ENTRY    = int32(100)
@@ -85,7 +86,7 @@ func doInit(server *Server, req *request) {
 	server.reqMu.Lock()
 	server.kernelSettings = *input
 	server.kernelSettings.Flags = input.Flags & (CAP_ASYNC_READ | CAP_BIG_WRITES | CAP_FILE_OPS |
-		CAP_AUTO_INVAL_DATA | CAP_READDIRPLUS | CAP_NO_OPEN_SUPPORT)
+		CAP_AUTO_INVAL_DATA | CAP_READDIRPLUS | CAP_NO_OPEN_SUPPORT | CAP_PARALLEL_DIROPS)
 
 	if server.opts.EnableLocks {
 		server.kernelSettings.Flags |= CAP_FLOCK_LOCKS | CAP_POSIX_LOCKS
@@ -313,7 +314,8 @@ func doBatchForget(server *Server, req *request) {
 	forgets := *(*[]_ForgetOne)(unsafe.Pointer(h))
 	for i, f := range forgets {
 		if server.opts.Debug {
-			log.Printf("doBatchForget: forgetting %d of %d: NodeId: %d, Nlookup: %d", i+1, len(forgets), f.NodeId, f.Nlookup)
+			log.Printf("doBatchForget: rx %d %d/%d: FORGET i%d {Nlookup=%d}",
+				req.inHeader.Unique, i+1, len(forgets), f.NodeId, f.Nlookup)
 		}
 		if f.NodeId == pollHackInode {
 			continue
@@ -408,6 +410,15 @@ func doSymlink(server *Server, req *request) {
 }
 
 func doRename(server *Server, req *request) {
+	in1 := (*Rename1In)(req.inData)
+	in := RenameIn{
+		InHeader: in1.InHeader,
+		Newdir:   in1.Newdir,
+	}
+	req.status = server.fileSystem.Rename(&in, req.filenames[0], req.filenames[1])
+}
+
+func doRename2(server *Server, req *request) {
 	req.status = server.fileSystem.Rename((*RenameIn)(req.inData), req.filenames[0], req.filenames[1])
 }
 
@@ -482,7 +493,7 @@ func getHandler(o int32) *operationHandler {
 func init() {
 	operationHandlers = make([]*operationHandler, _OPCODE_COUNT)
 	for i := range operationHandlers {
-		operationHandlers[i] = &operationHandler{Name: "UNKNOWN"}
+		operationHandlers[i] = &operationHandler{Name: fmt.Sprintf("OPCODE-%d", i)}
 	}
 
 	fileOps := []int32{_OP_READLINK, _OP_NOTIFY_INVAL_ENTRY, _OP_NOTIFY_DELETE}
@@ -497,7 +508,7 @@ func init() {
 		_OP_SETATTR:      unsafe.Sizeof(SetAttrIn{}),
 		_OP_MKNOD:        unsafe.Sizeof(MknodIn{}),
 		_OP_MKDIR:        unsafe.Sizeof(MkdirIn{}),
-		_OP_RENAME:       unsafe.Sizeof(RenameIn{}),
+		_OP_RENAME:       unsafe.Sizeof(Rename1In{}),
 		_OP_LINK:         unsafe.Sizeof(LinkIn{}),
 		_OP_OPEN:         unsafe.Sizeof(OpenIn{}),
 		_OP_READ:         unsafe.Sizeof(ReadIn{}),
@@ -525,6 +536,7 @@ func init() {
 		_OP_NOTIFY_REPLY: unsafe.Sizeof(NotifyRetrieveIn{}),
 		_OP_FALLOCATE:    unsafe.Sizeof(FallocateIn{}),
 		_OP_READDIRPLUS:  unsafe.Sizeof(ReadIn{}),
+		_OP_RENAME2:      unsafe.Sizeof(RenameIn{}),
 	} {
 		operationHandlers[op].InputSize = sz
 	}
@@ -606,6 +618,7 @@ func init() {
 		_OP_NOTIFY_DELETE:         "NOTIFY_DELETE",
 		_OP_FALLOCATE:             "FALLOCATE",
 		_OP_READDIRPLUS:           "READDIRPLUS",
+		_OP_RENAME2:               "RENAME2",
 	} {
 		operationHandlers[op].Name = v
 	}
@@ -650,6 +663,7 @@ func init() {
 		_OP_NOTIFY_REPLY: doNotifyReply,
 		_OP_FALLOCATE:    doFallocate,
 		_OP_READDIRPLUS:  doReadDirPlus,
+		_OP_RENAME2:      doRename2,
 	} {
 		operationHandlers[op].Func = v
 	}
@@ -702,10 +716,11 @@ func init() {
 		_OP_FALLOCATE:    func(ptr unsafe.Pointer) interface{} { return (*FallocateIn)(ptr) },
 		_OP_NOTIFY_REPLY: func(ptr unsafe.Pointer) interface{} { return (*NotifyRetrieveIn)(ptr) },
 		_OP_READDIRPLUS:  func(ptr unsafe.Pointer) interface{} { return (*ReadIn)(ptr) },
-		_OP_RENAME:       func(ptr unsafe.Pointer) interface{} { return (*RenameIn)(ptr) },
+		_OP_RENAME:       func(ptr unsafe.Pointer) interface{} { return (*Rename1In)(ptr) },
 		_OP_GETLK:        func(ptr unsafe.Pointer) interface{} { return (*LkIn)(ptr) },
 		_OP_SETLK:        func(ptr unsafe.Pointer) interface{} { return (*LkIn)(ptr) },
 		_OP_SETLKW:       func(ptr unsafe.Pointer) interface{} { return (*LkIn)(ptr) },
+		_OP_RENAME2:      func(ptr unsafe.Pointer) interface{} { return (*RenameIn)(ptr) },
 	} {
 		operationHandlers[op].DecodeIn = f
 	}
@@ -721,6 +736,7 @@ func init() {
 		_OP_MKNOD:       1,
 		_OP_REMOVEXATTR: 1,
 		_OP_RENAME:      2,
+		_OP_RENAME2:     2,
 		_OP_RMDIR:       1,
 		_OP_SYMLINK:     2,
 		_OP_UNLINK:      1,

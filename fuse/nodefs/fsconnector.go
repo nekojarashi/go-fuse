@@ -12,6 +12,7 @@ import (
 	"log"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -35,6 +36,13 @@ type FileSystemConnector struct {
 
 	// The root of the FUSE file system.
 	rootNode *Inode
+
+	// This lock prevents Lookup() and Forget() from running concurrently.
+	// Locking at this level is a big hammer, but makes sure we don't return
+	// forgotten nodes to the kernel. Problems solved by this lock:
+	// https://github.com/hanwen/go-fuse/issues/168
+	// https://github.com/rfjakob/gocryptfs/issues/322
+	lookupLock sync.Mutex
 }
 
 // NewOptions generates FUSE options that correspond to libfuse's
@@ -92,7 +100,7 @@ func (c *FileSystemConnector) verify() {
 
 // childLookup fills entry information for a newly created child inode
 func (c *rawBridge) childLookup(out *fuse.EntryOut, n *Inode, context *fuse.Context) {
-	n.Node().GetAttr((*fuse.Attr)(&out.Attr), nil, context)
+	n.Node().GetAttr(&out.Attr, nil, context)
 	n.mount.fillEntry(out)
 	out.NodeId, out.Generation = c.fsConn().lookupUpdate(n)
 	if out.Ino == 0 {
@@ -276,7 +284,7 @@ func (c *FileSystemConnector) lockMount(parent *Inode, name string, root Node, o
 
 	node.mountPoint.parentInode = parent
 	if c.debug {
-		log.Printf("Mount %T on subdir %s, parent %d", node,
+		log.Printf("Mount %T on subdir %s, parent i%d", node,
 			name, c.inodeMap.Handle(&parent.handled))
 	}
 	return node, fuse.OK

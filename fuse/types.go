@@ -7,6 +7,7 @@ package fuse
 import (
 	"io"
 	"syscall"
+	"time"
 )
 
 const (
@@ -96,12 +97,12 @@ type MkdirIn struct {
 	Umask uint32
 }
 
-type RenameIn struct {
+type Rename1In struct {
 	InHeader
 	Newdir uint64
 }
 
-type Rename2In struct {
+type RenameIn struct {
 	InHeader
 	Newdir  uint64
 	Flags   uint32
@@ -152,6 +153,79 @@ type SetAttrInCommon struct {
 	Unused5 uint32
 }
 
+func (s *SetAttrInCommon) GetFh() (uint64, bool) {
+	if s.Valid&FATTR_FH != 0 {
+		return s.Fh, true
+	}
+	return 0, false
+}
+
+func (s *SetAttrInCommon) GetMode() (uint32, bool) {
+	if s.Valid&FATTR_MODE != 0 {
+		return s.Mode & 07777, true
+	}
+	return 0, false
+}
+
+func (s *SetAttrInCommon) GetUID() (uint32, bool) {
+	if s.Valid&FATTR_UID != 0 {
+		return s.Uid, true
+	}
+	return ^uint32(0), false
+}
+
+func (s *SetAttrInCommon) GetGID() (uint32, bool) {
+	if s.Valid&FATTR_GID != 0 {
+		return s.Gid, true
+	}
+	return ^uint32(0), false
+}
+
+func (s *SetAttrInCommon) GetSize() (uint64, bool) {
+	if s.Valid&FATTR_SIZE != 0 {
+		return s.Size, true
+	}
+	return 0, false
+}
+
+func (s *SetAttrInCommon) GetMTime() (time.Time, bool) {
+	var t time.Time
+	if s.Valid&FATTR_MTIME != 0 {
+		if s.Valid&FATTR_MTIME_NOW != 0 {
+			t = time.Now()
+		} else {
+			t = time.Unix(int64(s.Mtime), int64(s.Mtimensec))
+		}
+		return t, true
+	}
+
+	return t, false
+}
+
+func (s *SetAttrInCommon) GetATime() (time.Time, bool) {
+	var t time.Time
+	if s.Valid&FATTR_ATIME != 0 {
+		if s.Valid&FATTR_ATIME_NOW != 0 {
+			t = time.Now()
+		} else {
+			t = time.Unix(int64(s.Atime), int64(s.Atimensec))
+		}
+		return t, true
+	}
+
+	return t, false
+}
+
+func (s *SetAttrInCommon) GetCTime() (time.Time, bool) {
+	var t time.Time
+	if s.Valid&FATTR_CTIME != 0 {
+		t = time.Unix(int64(s.Ctime), int64(s.Ctimensec))
+		return t, true
+	}
+
+	return t, false
+}
+
 const RELEASE_FLUSH = (1 << 0)
 
 type ReleaseIn struct {
@@ -183,27 +257,31 @@ type OpenOut struct {
 
 // To be set in InitIn/InitOut.Flags.
 const (
-	CAP_ASYNC_READ       = (1 << 0)
-	CAP_POSIX_LOCKS      = (1 << 1)
-	CAP_FILE_OPS         = (1 << 2)
-	CAP_ATOMIC_O_TRUNC   = (1 << 3)
-	CAP_EXPORT_SUPPORT   = (1 << 4)
-	CAP_BIG_WRITES       = (1 << 5)
-	CAP_DONT_MASK        = (1 << 6)
-	CAP_SPLICE_WRITE     = (1 << 7)
-	CAP_SPLICE_MOVE      = (1 << 8)
-	CAP_SPLICE_READ      = (1 << 9)
-	CAP_FLOCK_LOCKS      = (1 << 10)
-	CAP_IOCTL_DIR        = (1 << 11)
-	CAP_AUTO_INVAL_DATA  = (1 << 12)
-	CAP_READDIRPLUS      = (1 << 13)
-	CAP_READDIRPLUS_AUTO = (1 << 14)
-	CAP_ASYNC_DIO        = (1 << 15)
-	CAP_WRITEBACK_CACHE  = (1 << 16)
-	CAP_NO_OPEN_SUPPORT  = (1 << 17)
-	CAP_PARALLEL_DIROPS  = (1 << 18)
-	CAP_POSIX_ACL        = (1 << 19)
-	CAP_HANDLE_KILLPRIV  = (1 << 20)
+	CAP_ASYNC_READ         = (1 << 0)
+	CAP_POSIX_LOCKS        = (1 << 1)
+	CAP_FILE_OPS           = (1 << 2)
+	CAP_ATOMIC_O_TRUNC     = (1 << 3)
+	CAP_EXPORT_SUPPORT     = (1 << 4)
+	CAP_BIG_WRITES         = (1 << 5)
+	CAP_DONT_MASK          = (1 << 6)
+	CAP_SPLICE_WRITE       = (1 << 7)
+	CAP_SPLICE_MOVE        = (1 << 8)
+	CAP_SPLICE_READ        = (1 << 9)
+	CAP_FLOCK_LOCKS        = (1 << 10)
+	CAP_IOCTL_DIR          = (1 << 11)
+	CAP_AUTO_INVAL_DATA    = (1 << 12)
+	CAP_READDIRPLUS        = (1 << 13)
+	CAP_READDIRPLUS_AUTO   = (1 << 14)
+	CAP_ASYNC_DIO          = (1 << 15)
+	CAP_WRITEBACK_CACHE    = (1 << 16)
+	CAP_NO_OPEN_SUPPORT    = (1 << 17)
+	CAP_PARALLEL_DIROPS    = (1 << 18)
+	CAP_HANDLE_KILLPRIV    = (1 << 19)
+	CAP_POSIX_ACL          = (1 << 20)
+	CAP_ABORT_ERROR        = (1 << 21)
+	CAP_MAX_PAGES          = (1 << 22)
+	CAP_CACHE_SYMLINKS     = (1 << 23)
+	CAP_NO_OPENDIR_SUPPORT = (1 << 24)
 )
 
 type InitIn struct {
@@ -433,11 +511,29 @@ type EntryOut struct {
 	Attr
 }
 
+func (o *EntryOut) SetEntryTimeout(dt time.Duration) {
+	ns := int64(dt)
+	o.EntryValidNsec = uint32(ns % 1e9)
+	o.EntryValid = uint64(ns / 1e9)
+}
+
+func (o *EntryOut) SetAttrTimeout(dt time.Duration) {
+	ns := int64(dt)
+	o.AttrValidNsec = uint32(ns % 1e9)
+	o.AttrValid = uint64(ns / 1e9)
+}
+
 type AttrOut struct {
 	AttrValid     uint64
 	AttrValidNsec uint32
 	Dummy         uint32
 	Attr
+}
+
+func (o *AttrOut) SetTimeout(dt time.Duration) {
+	ns := int64(dt)
+	o.AttrValidNsec = uint32(ns % 1e9)
+	o.AttrValid = uint64(ns / 1e9)
 }
 
 type CreateOut struct {
