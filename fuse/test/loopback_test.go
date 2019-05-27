@@ -25,9 +25,13 @@ import (
 )
 
 type testCase struct {
+	// Per-testcase temporary directory, usually in /tmp, named something like
+	// "$TESTNAME.123456".
 	tmpDir string
-	orig   string
-	mnt    string
+	// Backing directory. Lives in tmpDir.
+	orig string
+	// Mountpoint. Lives in tmpDir.
+	mnt string
 
 	mountFile   string
 	mountSubdir string
@@ -453,6 +457,16 @@ func TestRename(t *testing.T) {
 	}
 }
 
+func TestRenameNonExistent(t *testing.T) {
+	tc := NewTestCase(t)
+	defer tc.Cleanup()
+
+	err := os.Rename(tc.mnt+"/doesnotexist", tc.mnt+"/doesnotmatter")
+	if !os.IsNotExist(err) {
+		t.Errorf("got err %v, want ENOENT", err)
+	}
+}
+
 // Flaky test, due to rename race condition.
 func TestDelRename(t *testing.T) {
 	tc := NewTestCase(t)
@@ -549,7 +563,6 @@ func TestReaddir(t *testing.T) {
 	defer tc.Cleanup()
 
 	contents := []byte{1, 2, 3}
-	tc.WriteFile(tc.origFile, []byte(contents), 0700)
 	tc.Mkdir(tc.origSubdir, 0777)
 
 	dir, err := os.Open(tc.mnt)
@@ -557,6 +570,10 @@ func TestReaddir(t *testing.T) {
 		t.Fatalf("Open failed: %v", err)
 	}
 	defer dir.Close()
+
+	// READDIR should show "hello.txt" even if it is created after the OPENDIR.
+	// https://github.com/hanwen/go-fuse/issues/252
+	tc.WriteFile(tc.origFile, []byte(contents), 0700)
 
 	infos, err := dir.Readdir(10)
 	if err != nil {
@@ -568,7 +585,7 @@ func TestReaddir(t *testing.T) {
 		"subdir":    true,
 	}
 	if len(wanted) != len(infos) {
-		t.Errorf("Length mismatch %v", infos)
+		t.Errorf("Wrong number of directory entries: want=%d have=%d", len(wanted), len(infos))
 	} else {
 		for _, v := range infos {
 			_, ok := wanted[v.Name()]
@@ -576,6 +593,36 @@ func TestReaddir(t *testing.T) {
 				t.Errorf("Unexpected name %v", v.Name())
 			}
 		}
+	}
+}
+
+// Test that READDIR works even if the directory is renamed after the OPENDIR.
+// This checks that the fix for https://github.com/hanwen/go-fuse/issues/252
+// does not break this case.
+func TestReaddirRename(t *testing.T) {
+	tc := NewTestCase(t)
+	defer tc.Cleanup()
+
+	tc.Mkdir(tc.origSubdir, 0777)
+	tc.WriteFile(tc.origSubdir+"/file.txt", []byte("foo"), 0700)
+
+	dir, err := os.Open(tc.mountSubdir)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer dir.Close()
+
+	err = os.Rename(tc.mountSubdir, tc.mountSubdir+".2")
+	if err != nil {
+		t.Fatalf("Rename failed: %v", err)
+	}
+
+	names, err := dir.Readdirnames(-1)
+	if err != nil {
+		t.Fatalf("Readdirnames failed: %v", err)
+	}
+	if len(names) != 1 || names[0] != "file.txt" {
+		t.Fatalf("incorrect directory listing: %v", names)
 	}
 }
 

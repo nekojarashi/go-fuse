@@ -33,9 +33,9 @@ func TestFilePathHash(t *testing.T) {
 }
 
 var testOpts = UnionFsOptions{
-	DeletionCacheTTL: entryTtl,
+	DeletionCacheTTL: entryTTL,
 	DeletionDirName:  "DELETIONS",
-	BranchCacheTTL:   entryTtl,
+	BranchCacheTTL:   entryTTL,
 	HiddenFiles:      []string{"hidden"},
 }
 
@@ -94,9 +94,9 @@ func setupUfs(t *testing.T) (wd string, cleanup func()) {
 	// We configure timeouts are smaller, so we can check for
 	// UnionFs's cache consistency.
 	opts := &nodefs.Options{
-		EntryTimeout:        entryTtl / 2,
-		AttrTimeout:         entryTtl / 2,
-		NegativeTimeout:     entryTtl / 2,
+		EntryTimeout:        entryTTL / 2,
+		AttrTimeout:         entryTTL / 2,
+		NegativeTimeout:     entryTTL / 2,
 		PortableInodes:      true,
 		Debug:               testutil.VerboseTest(),
 		LookupKnownChildren: true,
@@ -522,48 +522,50 @@ func TestUnionFsRename(t *testing.T) {
 	}
 
 	for i, c := range configs {
-		t.Log("Config", i, c)
-		wd, clean := setupUfs(t)
-		if c.f1_ro {
-			WriteFile(t, wd+"/ro/file1", "c1")
-		}
-		if c.f1_rw {
-			WriteFile(t, wd+"/rw/file1", "c2")
-		}
-		if c.f2_ro {
-			WriteFile(t, wd+"/ro/file2", "c3")
-		}
-		if c.f2_rw {
-			WriteFile(t, wd+"/rw/file2", "c4")
-		}
+		t.Run(fmt.Sprintf("config %d", i), func(t *testing.T) {
+			wd, clean := setupUfs(t)
+			defer clean()
 
-		err := os.Rename(wd+"/mnt/file1", wd+"/mnt/file2")
-		if err != nil {
-			t.Fatalf("Rename: %v", err)
-		}
+			if c.f1_ro {
+				WriteFile(t, wd+"/ro/file1", "c1")
+			}
+			if c.f1_rw {
+				WriteFile(t, wd+"/rw/file1", "c2")
+			}
+			if c.f2_ro {
+				WriteFile(t, wd+"/ro/file2", "c3")
+			}
+			if c.f2_rw {
+				WriteFile(t, wd+"/rw/file2", "c4")
+			}
 
-		_, err = os.Lstat(wd + "/mnt/file1")
-		if err == nil {
-			t.Errorf("Should have lost file1")
-		}
-		_, err = os.Lstat(wd + "/mnt/file2")
-		if err != nil {
-			t.Errorf("Should have gotten file2: %v", err)
-		}
-		err = os.Rename(wd+"/mnt/file2", wd+"/mnt/file1")
-		if err != nil {
-			t.Fatalf("Rename: %v", err)
-		}
+			err := os.Rename(wd+"/mnt/file1", wd+"/mnt/file2")
+			if err != nil {
+				t.Fatalf("Rename: %v", err)
+			}
 
-		_, err = os.Lstat(wd + "/mnt/file2")
-		if err == nil {
-			t.Errorf("Should have lost file2")
-		}
-		_, err = os.Lstat(wd + "/mnt/file1")
-		if err != nil {
-			t.Errorf("Should have gotten file1: %v", err)
-		}
-		clean()
+			_, err = os.Lstat(wd + "/mnt/file1")
+			if err == nil {
+				t.Errorf("Should have lost file1")
+			}
+			_, err = os.Lstat(wd + "/mnt/file2")
+			if err != nil {
+				t.Errorf("Should have gotten file2: %v", err)
+			}
+			err = os.Rename(wd+"/mnt/file2", wd+"/mnt/file1")
+			if err != nil {
+				t.Fatalf("Rename: %v", err)
+			}
+
+			_, err = os.Lstat(wd + "/mnt/file2")
+			if err == nil {
+				t.Errorf("Should have lost file2")
+			}
+			_, err = os.Lstat(wd + "/mnt/file1")
+			if err != nil {
+				t.Errorf("Should have gotten file1: %v", err)
+			}
+		})
 	}
 }
 
@@ -828,9 +830,9 @@ func TestUnionFsCopyChmod(t *testing.T) {
 		t.Fatalf("Lstat(%v): %v", fn, err)
 	}
 	if fi.Mode()&0111 == 0 {
-		t.Errorf("Lstat(%v): mode %o", fn, fi.Mode())
+		t.Errorf("Lstat(%v): got mode %o, want some +x bit", fn, fi.Mode())
 	}
-	time.Sleep(entryTtl)
+	time.Sleep(entryTTL)
 	fi, err = os.Lstat(fn)
 	if err != nil {
 		t.Fatalf("Lstat(%v) after sleep: %v", fn, err)
@@ -1038,7 +1040,7 @@ func TestUnionFsDropDeletionCache(t *testing.T) {
 	}
 
 	// Expire kernel entry.
-	time.Sleep((6 * entryTtl) / 10)
+	time.Sleep((6 * entryTTL) / 10)
 	err = ioutil.WriteFile(wd+"/mnt/.drop_cache", []byte(""), 0644)
 	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
@@ -1162,9 +1164,9 @@ func TestUnionFsDisappearing(t *testing.T) {
 	}
 
 	opts := &nodefs.Options{
-		EntryTimeout:        entryTtl,
-		AttrTimeout:         entryTtl,
-		NegativeTimeout:     entryTtl,
+		EntryTimeout:        entryTTL,
+		AttrTimeout:         entryTTL,
+		NegativeTimeout:     entryTTL,
 		Debug:               testutil.VerboseTest(),
 		LookupKnownChildren: true,
 	}
@@ -1190,7 +1192,7 @@ func TestUnionFsDisappearing(t *testing.T) {
 	}
 
 	wrFs.visibleChan <- false
-	time.Sleep((3 * entryTtl) / 2)
+	time.Sleep((3 * entryTTL) / 2)
 
 	_, err = ioutil.ReadDir(wd + "/mnt")
 	if err == nil {
@@ -1203,7 +1205,7 @@ func TestUnionFsDisappearing(t *testing.T) {
 	}
 
 	// Wait for the caches to purge, and then restore.
-	time.Sleep((3 * entryTtl) / 2)
+	time.Sleep((3 * entryTTL) / 2)
 	wrFs.visibleChan <- true
 
 	_, err = ioutil.ReadDir(wd + "/mnt")

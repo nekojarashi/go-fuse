@@ -59,13 +59,13 @@ func (m *fileSystemMount) mountName() string {
 
 func (m *fileSystemMount) setOwner(attr *fuse.Attr) {
 	if m.options.Owner != nil {
-		attr.Owner = *(*fuse.Owner)(m.options.Owner)
+		attr.Owner = *m.options.Owner
 	}
 }
 
 func (m *fileSystemMount) fillEntry(out *fuse.EntryOut) {
-	splitDuration(m.options.EntryTimeout, &out.EntryValid, &out.EntryValidNsec)
-	splitDuration(m.options.AttrTimeout, &out.AttrValid, &out.AttrValidNsec)
+	out.SetEntryTimeout(m.options.EntryTimeout)
+	out.SetAttrTimeout(m.options.AttrTimeout)
 	m.setOwner(&out.Attr)
 	if out.Mode&fuse.S_IFDIR == 0 && out.Nlink == 0 {
 		out.Nlink = 1
@@ -73,7 +73,7 @@ func (m *fileSystemMount) fillEntry(out *fuse.EntryOut) {
 }
 
 func (m *fileSystemMount) fillAttr(out *fuse.AttrOut, nodeId uint64) {
-	splitDuration(m.options.AttrTimeout, &out.AttrValid, &out.AttrValidNsec)
+	out.SetTimeout(m.options.AttrTimeout)
 	m.setOwner(&out.Attr)
 	if out.Ino == 0 {
 		out.Ino = nodeId
@@ -116,8 +116,24 @@ func (m *fileSystemMount) unregisterFileHandle(handle uint64, node *Inode) *open
 	return opened
 }
 
-func (m *fileSystemMount) registerFileHandle(node *Inode, dir *connectorDir, f File, flags uint32) (uint64, *openedFile) {
-	node.openFilesMutex.Lock()
+// registerFileHandle registers f or dir to have a handle.
+//
+// The handle is then used as file-handle in communications with kernel.
+//
+// If dir != nil the handle is registered for OpenDir and the inner file (see
+// below) must be nil. If dir = nil the handle is registered for regular open &
+// friends.
+//
+// f can be nil, or a WithFlags that leads to File=nil. For !OpenDir, if that
+// is the case, returned handle will be 0 to indicate a handleless open, and
+// the filesystem operations on the opened file will be routed to be served by
+// the node.
+//
+// other arguments:
+//
+//	node  - Inode for which f or dir were opened,
+//	flags - file open flags, like O_RDWR.
+func (m *fileSystemMount) registerFileHandle(node *Inode, dir *connectorDir, f File, flags uint32) (handle uint64, opened *openedFile) {
 	b := &openedFile{
 		dir: dir,
 		WithFlags: WithFlags{
@@ -138,11 +154,23 @@ func (m *fileSystemMount) registerFileHandle(node *Inode, dir *connectorDir, f F
 		f = withFlags.File
 	}
 
+	// don't allow both dir and file
+	if dir != nil && b.WithFlags.File != nil {
+		panic("registerFileHandle: both dir and file are set.")
+	}
+
+	if b.WithFlags.File == nil && dir == nil {
+		// it was just WithFlags{...}, but the file itself is nil
+		return 0, b
+	}
+
 	if b.WithFlags.File != nil {
 		b.WithFlags.File.SetInode(node)
 	}
+
+	node.openFilesMutex.Lock()
 	node.openFiles = append(node.openFiles, b)
-	handle, _ := m.openFiles.Register(&b.handled)
+	handle, _ = m.openFiles.Register(&b.handled)
 	node.openFilesMutex.Unlock()
 	return handle, b
 }
@@ -151,7 +179,7 @@ func (m *fileSystemMount) registerFileHandle(node *Inode, dir *connectorDir, f F
 func (m *fileSystemMount) negativeEntry(out *fuse.EntryOut) bool {
 	if m.options.NegativeTimeout > 0.0 {
 		out.NodeId = 0
-		splitDuration(m.options.NegativeTimeout, &out.EntryValid, &out.EntryValidNsec)
+		out.SetEntryTimeout(m.options.NegativeTimeout)
 		return true
 	}
 	return false

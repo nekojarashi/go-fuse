@@ -234,7 +234,6 @@ func (fs *unionFS) deletionPath(name string) string {
 
 func (fs *unionFS) removeDeletion(name string) {
 	marker := fs.deletionPath(name)
-	fs.deletionCache.RemoveEntry(path.Base(marker))
 
 	// os.Remove tries to be smart and issues a Remove() and
 	// Rmdir() sequentially.  We want to skip the 2nd system call,
@@ -244,6 +243,10 @@ func (fs *unionFS) removeDeletion(name string) {
 	if !code.Ok() && code != fuse.ENOENT {
 		log.Printf("error unlinking %s: %v", marker, code)
 	}
+
+	// Update in-memory cache as last step, so we avoid caching a
+	// state from before the storage update.
+	fs.deletionCache.RemoveEntry(path.Base(marker))
 }
 
 func (fs *unionFS) putDeletion(name string) (code fuse.Status) {
@@ -253,7 +256,6 @@ func (fs *unionFS) putDeletion(name string) (code fuse.Status) {
 	}
 
 	marker := fs.deletionPath(name)
-	fs.deletionCache.AddEntry(path.Base(marker))
 
 	// Is there a WriteStringToFileOrDie ?
 	writable := fs.fileSystems[0]
@@ -279,6 +281,10 @@ func (fs *unionFS) putDeletion(name string) (code fuse.Status) {
 	if int(n) != len(name) || !code.Ok() {
 		panic(fmt.Sprintf("Error for writing %v: %v, %v (exp %v) %v", name, marker, n, len(name), code))
 	}
+
+	// Update the in-memory deletion cache as the last step,
+	// to ensure that the new state stays in memory
+	fs.deletionCache.AddEntry(path.Base(marker))
 
 	return fuse.OK
 }
@@ -490,6 +496,9 @@ func (fs *unionFS) Truncate(path string, size uint64, context *fuse.Context) (co
 		code = fs.fileSystems[0].Truncate(path, size, context)
 	}
 	if code.Ok() {
+		newAttr := *r.attr
+
+		r.attr = &newAttr
 		r.attr.Size = size
 		now := time.Now()
 		r.attr.SetTimes(nil, &now, &now)
@@ -512,6 +521,8 @@ func (fs *unionFS) Utimens(name string, atime *time.Time, mtime *time.Time, cont
 	}
 	if code.Ok() {
 		now := time.Now()
+		newAttr := *r.attr
+		r.attr = &newAttr
 		r.attr.SetTimes(atime, mtime, &now)
 		fs.setBranch(name, r)
 	}
@@ -524,6 +535,9 @@ func (fs *unionFS) Chown(name string, uid uint32, gid uint32, context *fuse.Cont
 	if r.attr == nil || r.code != fuse.OK {
 		return r.code
 	}
+
+	newAttr := *r.attr
+	r.attr = &newAttr
 
 	if os.Geteuid() != 0 {
 		return fuse.EPERM
@@ -553,6 +567,8 @@ func (fs *unionFS) Chmod(name string, mode uint32, context *fuse.Context) (code 
 	if r.attr == nil {
 		return r.code
 	}
+	newAttr := *r.attr
+	r.attr = &newAttr
 	if r.code != fuse.OK {
 		return r.code
 	}
@@ -738,7 +754,7 @@ func (fs *unionFS) OpenDir(directory string, context *fuse.Context) (stream []fu
 	// We could try to use the cache, but we have a delay, so
 	// might as well get the fresh results async.
 	var wg sync.WaitGroup
-	var deletions map[string]bool
+	var deletions map[string]struct{}
 
 	wg.Add(1)
 	go func() {
@@ -770,7 +786,7 @@ func (fs *unionFS) OpenDir(directory string, context *fuse.Context) (stream []fu
 	if deletions == nil {
 		_, code := fs.fileSystems[0].GetAttr(fs.options.DeletionDirName, context)
 		if code == fuse.ENOENT {
-			deletions = map[string]bool{}
+			deletions = map[string]struct{}{}
 		} else {
 			return nil, fuse.Status(syscall.EROFS)
 		}
@@ -795,7 +811,7 @@ func (fs *unionFS) OpenDir(directory string, context *fuse.Context) (stream []fu
 				continue
 			}
 
-			deleted := deletions[filePathHash(filepath.Join(directory, k))]
+			_, deleted := deletions[filePathHash(filepath.Join(directory, k))]
 			if !deleted {
 				results[k] = v
 			}
@@ -885,38 +901,38 @@ func (fs *unionFS) renameDirectory(srcResult branchResult, srcDir string, dstDir
 	return code
 }
 
-func (fs *unionFS) Rename(src string, dst string, context *fuse.Context) (code fuse.Status) {
+func (fs *unionFS) Rename(src string, dst string, context *fuse.Context) fuse.Status {
 	srcResult := fs.getBranch(src)
-	code = srcResult.code
-	if code.Ok() {
-		code = srcResult.code
+	if !srcResult.code.Ok() {
+		return srcResult.code
 	}
 
 	if srcResult.attr.IsDir() {
 		return fs.renameDirectory(srcResult, src, dst, context)
 	}
 
-	if code.Ok() && srcResult.branch > 0 {
-		code = fs.Promote(src, srcResult, context)
-	}
-	if code.Ok() {
-		code = fs.promoteDirsTo(dst)
-	}
-	if code.Ok() {
-		code = fs.fileSystems[0].Rename(src, dst, context)
-	}
-
-	if code.Ok() {
-		fs.removeDeletion(dst)
-		// Rename is racy; avoid racing with unionFsFile.Release().
-		fs.branchCache.DropEntry(dst)
-
-		srcResult := fs.branchCache.GetFresh(src)
-		if srcResult.(branchResult).branch > 0 {
-			code = fs.putDeletion(src)
+	if srcResult.branch > 0 {
+		if code := fs.Promote(src, srcResult, context); !code.Ok() {
+			return code
 		}
 	}
-	return code
+	if code := fs.promoteDirsTo(dst); !code.Ok() {
+		return code
+	}
+
+	if code := fs.fileSystems[0].Rename(src, dst, context); !code.Ok() {
+		return code
+	}
+
+	fs.removeDeletion(dst)
+	// Rename is racy; avoid racing with unionFsFile.Release().
+	fs.branchCache.DropEntry(dst)
+
+	srcResult = fs.branchCache.GetFresh(src).(branchResult)
+	if srcResult.branch > 0 {
+		return fs.putDeletion(src)
+	}
+	return fuse.OK
 }
 
 func (fs *unionFS) DropBranchCache(names []string) {
