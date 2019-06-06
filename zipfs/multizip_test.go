@@ -10,32 +10,30 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nekojarashi/go-fuse/fs"
 	"github.com/nekojarashi/go-fuse/fuse"
-	"github.com/nekojarashi/go-fuse/fuse/nodefs"
-	"github.com/nekojarashi/go-fuse/fuse/pathfs"
 	"github.com/nekojarashi/go-fuse/internal/testutil"
 )
 
 const testTtl = 100 * time.Millisecond
 
 func setupMzfs(t *testing.T) (mountPoint string, state *fuse.Server, cleanup func()) {
-	fs := NewMultiZipFs()
+	root := &MultiZipFs{}
 	mountPoint = testutil.TempDir()
-	nfs := pathfs.NewPathNodeFs(fs, nil)
-	state, _, err := nodefs.MountRoot(mountPoint, nfs.Root(), &nodefs.Options{
-		EntryTimeout:    testTtl,
-		AttrTimeout:     testTtl,
-		NegativeTimeout: 0.0,
-		Debug:           testutil.VerboseTest(),
-	})
+
+	dt := testTtl
+	opts := &fs.Options{
+		EntryTimeout: &dt,
+		AttrTimeout:  &dt,
+	}
+	opts.Debug = testutil.VerboseTest()
+
+	server, err := fs.Mount(mountPoint, root, opts)
 	if err != nil {
 		t.Fatalf("MountNodeFileSystem failed: %v", err)
 	}
-	go state.Serve()
-	state.WaitMount()
-
-	return mountPoint, state, func() {
-		state.Unmount()
+	return mountPoint, server, func() {
+		server.Unmount()
 		os.RemoveAll(mountPoint)
 	}
 }

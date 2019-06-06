@@ -6,11 +6,13 @@ package test
 
 import (
 	"bytes"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nekojarashi/go-fuse/fuse"
 	"github.com/nekojarashi/go-fuse/fuse/nodefs"
@@ -44,9 +46,17 @@ func setupCacheTest(t *testing.T) (string, *pathfs.PathNodeFs, func()) {
 	}
 	pfs := pathfs.NewPathNodeFs(fs, &pathfs.PathNodeFsOptions{Debug: testutil.VerboseTest()})
 
+	mntOpts := &fuse.MountOptions{
+		// ask kernel not to invalidate file data automatically
+		ExplicitDataCacheControl: true,
+
+		Debug: testutil.VerboseTest(),
+	}
+
 	opts := nodefs.NewOptions()
+	opts.AttrTimeout = 10*time.Millisecond
 	opts.Debug = testutil.VerboseTest()
-	state, _, err := nodefs.MountRoot(dir+"/mnt", pfs.Root(), opts)
+	state, _, err := nodefs.Mount(dir+"/mnt", pfs.Root(), mntOpts, opts)
 	if err != nil {
 		t.Fatalf("MountNodeFileSystem failed: %v", err)
 	}
@@ -67,34 +77,68 @@ func TestFopenKeepCache(t *testing.T) {
 		t.Skip("FOPEN_KEEP_CACHE is broken on Darwin.")
 	}
 
-	// Failing on 4.20.5-200.fc29.x86_64.
-	// reported as https://github.com/libfuse/libfuse/issues/362
-	t.Skip("started failing on linux")
-
 	wd, pathfs, clean := setupCacheTest(t)
 	defer clean()
 
-	before := "before"
-	after := "after"
-	if err := ioutil.WriteFile(wd+"/orig/file.txt", []byte(before), 0644); err != nil {
-		t.Fatalf("WriteFile failed: %v", err)
+	// x{read,write}File reads/writes file@path and fail on error
+	xreadFile := func(path string) string {
+		data, err := ioutil.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	xwriteFile := func(path, data string) {
+		if err := ioutil.WriteFile(path, []byte(data), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// xstat stats path and fails on error
+	xstat := func(path string) os.FileInfo {
+		st, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
 	}
 
-	c, err := ioutil.ReadFile(wd + "/mnt/file.txt")
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	} else if string(c) != before {
+	// XXX Linux FUSE client automatically invalidates cache of a file if it sees size change.
+	//     As workaround we keep len(before) == len(after) to avoid that codepath.
+	//     See https://github.com/hanwen/go-fuse/pull/273 for details.
+	//
+	// TODO use len(before) != len(after) if kernel supports precise control over data cache.
+	before := "before"
+	after := "afterX"
+	if len(before) != len(after) {
+		panic("len(before) != len(after)")
+	}
+
+	xwriteFile(wd+"/orig/file.txt", before)
+	mtimeBefore := xstat(wd + "/orig/file.txt").ModTime()
+	c := xreadFile(wd + "/mnt/file.txt")
+	if c != before {
 		t.Fatalf("ReadFile: got %q, want %q", c, before)
 	}
 
-	if err := ioutil.WriteFile(wd+"/orig/file.txt", []byte(after), 0644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+	// sleep a bit to make sure mtime of file for before and after are different
+	time.Sleep(20*time.Millisecond)
+
+	xwriteFile(wd+"/orig/file.txt", after)
+	mtimeAfter := xstat(wd + "/orig/file.txt").ModTime()
+	if δ := mtimeAfter.Sub(mtimeBefore); δ == 0 {
+		panic(fmt.Sprintf("mtime(orig/before) == mtime(orig/after)"))
 	}
 
-	c, err = ioutil.ReadFile(wd + "/mnt/file.txt")
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	} else if string(c) != before {
+	// sleep enough time for file attributes to expire; restat the file after.
+	// this forces kernel client to relookup/regetattr the file and reread the attributes.
+	//
+	// this way we make sure the kernel knows updated size/mtime before we
+	// try to read the file next time.
+	time.Sleep(100*time.Millisecond)
+	_ = xstat(wd + "/mnt/file.txt")
+
+	c = xreadFile(wd + "/mnt/file.txt")
+	if c != before {
 		t.Fatalf("ReadFile: got %q, want cached %q", c, before)
 	}
 
@@ -107,10 +151,8 @@ func TestFopenKeepCache(t *testing.T) {
 		t.Errorf("EntryNotify: %v", code)
 	}
 
-	c, err = ioutil.ReadFile(wd + "/mnt/file.txt")
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	} else if string(c) != after {
+	c = xreadFile(wd + "/mnt/file.txt")
+	if c != after {
 		t.Fatalf("ReadFile: got %q after notify, want %q", c, after)
 	}
 }

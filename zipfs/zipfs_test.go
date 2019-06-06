@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nekojarashi/go-fuse/fs"
 	"github.com/nekojarashi/go-fuse/fuse"
-	"github.com/nekojarashi/go-fuse/fuse/nodefs"
 	"github.com/nekojarashi/go-fuse/internal/testutil"
 )
 
@@ -34,15 +34,12 @@ func setupZipfs(t *testing.T) (mountPoint string, cleanup func()) {
 	}
 
 	mountPoint = testutil.TempDir()
-	state, _, err := nodefs.MountRoot(mountPoint, root, &nodefs.Options{
-		Debug: testutil.VerboseTest(),
-	})
-
-	go state.Serve()
-	state.WaitMount()
+	opts := &fs.Options{}
+	opts.Debug = testutil.VerboseTest()
+	server, err := fs.Mount(mountPoint, root, opts)
 
 	return mountPoint, func() {
-		state.Unmount()
+		server.Unmount()
 		os.RemoveAll(mountPoint)
 	}
 }
@@ -70,19 +67,17 @@ func TestZipFs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat failed: %v", err)
 	}
-	if fi.Mode() != 0664 {
-		t.Fatalf("File mode 0%o != 0664", fi.Mode())
+	if got, want := fi.Mode(), 0664; int(got) != want {
+		t.Fatalf("File mode: got 0%o want 0%o", got, want)
 	}
 	if st := fi.Sys().(*syscall.Stat_t); st.Blocks != 1 {
 		t.Errorf("got block count %d, want 1", st.Blocks)
 	}
 
-	mtime, err := time.Parse(time.RFC3339, "2011-02-22T12:56:12Z")
-	if err != nil {
+	if want, err := time.Parse(time.RFC3339, "2011-02-22T12:56:12Z"); err != nil {
 		panic(err)
-	}
-	if !fi.ModTime().Equal(mtime) {
-		t.Fatalf("File mtime %v != %v", fi.ModTime(), mtime)
+	} else if !fi.ModTime().Equal(want) {
+		t.Fatalf("File mtime got %v, want %v", fi.ModTime(), want)
 	}
 
 	if fi.IsDir() {

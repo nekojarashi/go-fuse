@@ -29,6 +29,9 @@ const (
 	// EAGAIN Resource temporarily unavailable
 	EAGAIN = Status(syscall.EAGAIN)
 
+	// EINTR Call was interrupted
+	EINTR = Status(syscall.EINTR)
+
 	// EINVAL Invalid argument
 	EINVAL = Status(syscall.EINVAL)
 
@@ -46,6 +49,9 @@ const (
 
 	// ENOTDIR Not a directory
 	ENOTDIR = Status(syscall.ENOTDIR)
+
+	// ENOTSUP Not supported
+	ENOTSUP = Status(syscall.ENOTSUP)
 
 	// EISDIR Is a directory
 	EISDIR = Status(syscall.EISDIR)
@@ -247,6 +253,8 @@ const (
 	FOPEN_DIRECT_IO   = (1 << 0)
 	FOPEN_KEEP_CACHE  = (1 << 1)
 	FOPEN_NONSEEKABLE = (1 << 2)
+	FOPEN_CACHE_DIR   = (1 << 3)
+	FOPEN_STREAM      = (1 << 4)
 )
 
 type OpenOut struct {
@@ -257,31 +265,32 @@ type OpenOut struct {
 
 // To be set in InitIn/InitOut.Flags.
 const (
-	CAP_ASYNC_READ         = (1 << 0)
-	CAP_POSIX_LOCKS        = (1 << 1)
-	CAP_FILE_OPS           = (1 << 2)
-	CAP_ATOMIC_O_TRUNC     = (1 << 3)
-	CAP_EXPORT_SUPPORT     = (1 << 4)
-	CAP_BIG_WRITES         = (1 << 5)
-	CAP_DONT_MASK          = (1 << 6)
-	CAP_SPLICE_WRITE       = (1 << 7)
-	CAP_SPLICE_MOVE        = (1 << 8)
-	CAP_SPLICE_READ        = (1 << 9)
-	CAP_FLOCK_LOCKS        = (1 << 10)
-	CAP_IOCTL_DIR          = (1 << 11)
-	CAP_AUTO_INVAL_DATA    = (1 << 12)
-	CAP_READDIRPLUS        = (1 << 13)
-	CAP_READDIRPLUS_AUTO   = (1 << 14)
-	CAP_ASYNC_DIO          = (1 << 15)
-	CAP_WRITEBACK_CACHE    = (1 << 16)
-	CAP_NO_OPEN_SUPPORT    = (1 << 17)
-	CAP_PARALLEL_DIROPS    = (1 << 18)
-	CAP_HANDLE_KILLPRIV    = (1 << 19)
-	CAP_POSIX_ACL          = (1 << 20)
-	CAP_ABORT_ERROR        = (1 << 21)
-	CAP_MAX_PAGES          = (1 << 22)
-	CAP_CACHE_SYMLINKS     = (1 << 23)
-	CAP_NO_OPENDIR_SUPPORT = (1 << 24)
+	CAP_ASYNC_READ          = (1 << 0)
+	CAP_POSIX_LOCKS         = (1 << 1)
+	CAP_FILE_OPS            = (1 << 2)
+	CAP_ATOMIC_O_TRUNC      = (1 << 3)
+	CAP_EXPORT_SUPPORT      = (1 << 4)
+	CAP_BIG_WRITES          = (1 << 5)
+	CAP_DONT_MASK           = (1 << 6)
+	CAP_SPLICE_WRITE        = (1 << 7)
+	CAP_SPLICE_MOVE         = (1 << 8)
+	CAP_SPLICE_READ         = (1 << 9)
+	CAP_FLOCK_LOCKS         = (1 << 10)
+	CAP_IOCTL_DIR           = (1 << 11)
+	CAP_AUTO_INVAL_DATA     = (1 << 12)
+	CAP_READDIRPLUS         = (1 << 13)
+	CAP_READDIRPLUS_AUTO    = (1 << 14)
+	CAP_ASYNC_DIO           = (1 << 15)
+	CAP_WRITEBACK_CACHE     = (1 << 16)
+	CAP_NO_OPEN_SUPPORT     = (1 << 17)
+	CAP_PARALLEL_DIROPS     = (1 << 18)
+	CAP_HANDLE_KILLPRIV     = (1 << 19)
+	CAP_POSIX_ACL           = (1 << 20)
+	CAP_ABORT_ERROR         = (1 << 21)
+	CAP_MAX_PAGES           = (1 << 22)
+	CAP_CACHE_SYMLINKS      = (1 << 23)
+	CAP_NO_OPENDIR_SUPPORT  = (1 << 24)
+	CAP_EXPLICIT_INVAL_DATA = (1 << 25)
 )
 
 type InitIn struct {
@@ -302,7 +311,9 @@ type InitOut struct {
 	CongestionThreshold uint16
 	MaxWrite            uint32
 	TimeGran            uint32
-	Unused              [9]uint32
+	MaxPages            uint16
+	Padding             uint16
+	Unused              [8]uint32
 }
 
 type _CuseInitIn struct {
@@ -501,6 +512,33 @@ type FlushIn struct {
 	LockOwner uint64
 }
 
+type LseekIn struct {
+	InHeader
+	Fh      uint64
+	Offset  uint64
+	Whence  uint32
+	Padding uint32
+}
+
+type LseekOut struct {
+	Offset uint64
+}
+
+type CopyFileRangeIn struct {
+	InHeader
+	FhIn      uint64
+	OffIn     uint64
+	NodeIdOut uint64
+	FhOut     uint64
+	OffOut    uint64
+	Len       uint64
+	Flags     uint64
+}
+
+// EntryOut holds the result of a (directory,name) lookup.  It has two
+// TTLs, one for the (directory, name) lookup itself, and one for the
+// attributes (eg. size, mode). The entry TTL also applies if the
+// lookup result is ENOENT ("negative entry lookup")
 type EntryOut struct {
 	NodeId         uint64
 	Generation     uint64
@@ -509,6 +547,15 @@ type EntryOut struct {
 	EntryValidNsec uint32
 	AttrValidNsec  uint32
 	Attr
+}
+
+// EntryTimeout returns entry timeout currently
+func (o *EntryOut) EntryTimeout() time.Duration {
+	return time.Duration(uint64(o.EntryValidNsec) + o.EntryValid*1e9)
+}
+
+func (o *EntryOut) AttrTimeout() time.Duration {
+	return time.Duration(uint64(o.AttrValidNsec) + o.AttrValid*1e9)
 }
 
 func (o *EntryOut) SetEntryTimeout(dt time.Duration) {
@@ -530,6 +577,10 @@ type AttrOut struct {
 	Attr
 }
 
+func (o *AttrOut) Timeout() time.Duration {
+	return time.Duration(uint64(o.AttrValidNsec) + o.AttrValid*1e9)
+}
+
 func (o *AttrOut) SetTimeout(dt time.Duration) {
 	ns := int64(dt)
 	o.AttrValidNsec = uint32(ns % 1e9)
@@ -541,17 +592,21 @@ type CreateOut struct {
 	OpenOut
 }
 
-type Context struct {
+// Caller has data on the process making the FS call.
+//
+// The UID and GID are effective UID/GID, except for the ACCESS
+// opcode, where UID and GID are the real UIDs
+type Caller struct {
 	Owner
 	Pid uint32
 }
 
 type InHeader struct {
 	Length uint32
-	Opcode int32
+	Opcode uint32
 	Unique uint64
 	NodeId uint64
-	Context
+	Caller
 	Padding uint32
 }
 

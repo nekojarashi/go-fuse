@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nekojarashi/go-fuse/fuse/nodefs"
+	"github.com/nekojarashi/go-fuse/fs"
 	"github.com/nekojarashi/go-fuse/zipfs"
 )
 
@@ -26,7 +26,7 @@ func main() {
 	profile := flag.String("profile", "", "record cpu profile.")
 	mem_profile := flag.String("mem-profile", "", "record memory profile.")
 	command := flag.String("run", "", "run this command after mounting.")
-	ttl := flag.Float64("ttl", 1.0, "attribute/entry cache TTL.")
+	ttl := flag.Duration("ttl", time.Second, "attribute/entry cache TTL.")
 	flag.Parse()
 	if flag.NArg() < 2 {
 		fmt.Fprintf(os.Stderr, "usage: %s MOUNTPOINT ZIP-FILE\n", os.Args[0])
@@ -54,12 +54,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	opts := &nodefs.Options{
-		AttrTimeout:  time.Duration(*ttl * float64(time.Second)),
-		EntryTimeout: time.Duration(*ttl * float64(time.Second)),
-		Debug:        *debug,
+	opts := &fs.Options{
+		AttrTimeout:        ttl,
+		EntryTimeout:       ttl,
+		DefaultPermissions: true,
 	}
-	state, _, err := nodefs.MountRoot(flag.Arg(0), root, opts)
+	opts.Debug = *debug
+	server, err := fs.Mount(flag.Arg(0), root, opts)
 	if err != nil {
 		fmt.Printf("Mount fail: %v\n", err)
 		os.Exit(1)
@@ -78,7 +79,7 @@ func main() {
 		cmd.Start()
 	}
 
-	state.Serve()
+	server.Wait()
 	if memProfFile != nil {
 		pprof.WriteHeapProfile(memProfFile)
 	}

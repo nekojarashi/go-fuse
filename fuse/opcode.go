@@ -10,62 +10,65 @@ import (
 	"log"
 	"reflect"
 	"runtime"
+	"time"
 	"unsafe"
 )
 
 const (
-	_OP_LOOKUP       = int32(1)
-	_OP_FORGET       = int32(2)
-	_OP_GETATTR      = int32(3)
-	_OP_SETATTR      = int32(4)
-	_OP_READLINK     = int32(5)
-	_OP_SYMLINK      = int32(6)
-	_OP_MKNOD        = int32(8)
-	_OP_MKDIR        = int32(9)
-	_OP_UNLINK       = int32(10)
-	_OP_RMDIR        = int32(11)
-	_OP_RENAME       = int32(12)
-	_OP_LINK         = int32(13)
-	_OP_OPEN         = int32(14)
-	_OP_READ         = int32(15)
-	_OP_WRITE        = int32(16)
-	_OP_STATFS       = int32(17)
-	_OP_RELEASE      = int32(18)
-	_OP_FSYNC        = int32(20)
-	_OP_SETXATTR     = int32(21)
-	_OP_GETXATTR     = int32(22)
-	_OP_LISTXATTR    = int32(23)
-	_OP_REMOVEXATTR  = int32(24)
-	_OP_FLUSH        = int32(25)
-	_OP_INIT         = int32(26)
-	_OP_OPENDIR      = int32(27)
-	_OP_READDIR      = int32(28)
-	_OP_RELEASEDIR   = int32(29)
-	_OP_FSYNCDIR     = int32(30)
-	_OP_GETLK        = int32(31)
-	_OP_SETLK        = int32(32)
-	_OP_SETLKW       = int32(33)
-	_OP_ACCESS       = int32(34)
-	_OP_CREATE       = int32(35)
-	_OP_INTERRUPT    = int32(36)
-	_OP_BMAP         = int32(37)
-	_OP_DESTROY      = int32(38)
-	_OP_IOCTL        = int32(39)
-	_OP_POLL         = int32(40)
-	_OP_NOTIFY_REPLY = int32(41)
-	_OP_BATCH_FORGET = int32(42)
-	_OP_FALLOCATE    = int32(43) // protocol version 19.
-	_OP_READDIRPLUS  = int32(44) // protocol version 21.
-	_OP_RENAME2      = int32(45) // protocol version 23.
+	_OP_LOOKUP          = uint32(1)
+	_OP_FORGET          = uint32(2)
+	_OP_GETATTR         = uint32(3)
+	_OP_SETATTR         = uint32(4)
+	_OP_READLINK        = uint32(5)
+	_OP_SYMLINK         = uint32(6)
+	_OP_MKNOD           = uint32(8)
+	_OP_MKDIR           = uint32(9)
+	_OP_UNLINK          = uint32(10)
+	_OP_RMDIR           = uint32(11)
+	_OP_RENAME          = uint32(12)
+	_OP_LINK            = uint32(13)
+	_OP_OPEN            = uint32(14)
+	_OP_READ            = uint32(15)
+	_OP_WRITE           = uint32(16)
+	_OP_STATFS          = uint32(17)
+	_OP_RELEASE         = uint32(18)
+	_OP_FSYNC           = uint32(20)
+	_OP_SETXATTR        = uint32(21)
+	_OP_GETXATTR        = uint32(22)
+	_OP_LISTXATTR       = uint32(23)
+	_OP_REMOVEXATTR     = uint32(24)
+	_OP_FLUSH           = uint32(25)
+	_OP_INIT            = uint32(26)
+	_OP_OPENDIR         = uint32(27)
+	_OP_READDIR         = uint32(28)
+	_OP_RELEASEDIR      = uint32(29)
+	_OP_FSYNCDIR        = uint32(30)
+	_OP_GETLK           = uint32(31)
+	_OP_SETLK           = uint32(32)
+	_OP_SETLKW          = uint32(33)
+	_OP_ACCESS          = uint32(34)
+	_OP_CREATE          = uint32(35)
+	_OP_INTERRUPT       = uint32(36)
+	_OP_BMAP            = uint32(37)
+	_OP_DESTROY         = uint32(38)
+	_OP_IOCTL           = uint32(39)
+	_OP_POLL            = uint32(40)
+	_OP_NOTIFY_REPLY    = uint32(41)
+	_OP_BATCH_FORGET    = uint32(42)
+	_OP_FALLOCATE       = uint32(43) // protocol version 19.
+	_OP_READDIRPLUS     = uint32(44) // protocol version 21.
+	_OP_RENAME2         = uint32(45) // protocol version 23.
+	_OP_LSEEK           = uint32(46) // protocol version 24
+	_OP_COPY_FILE_RANGE = uint32(47) // protocol version 28.
 
 	// The following entries don't have to be compatible across Go-FUSE versions.
-	_OP_NOTIFY_INVAL_ENTRY    = int32(100)
-	_OP_NOTIFY_INVAL_INODE    = int32(101)
-	_OP_NOTIFY_STORE_CACHE    = int32(102)
-	_OP_NOTIFY_RETRIEVE_CACHE = int32(103)
-	_OP_NOTIFY_DELETE         = int32(104) // protocol version 18
+	_OP_NOTIFY_INVAL_ENTRY    = uint32(100)
+	_OP_NOTIFY_INVAL_INODE    = uint32(101)
+	_OP_NOTIFY_STORE_CACHE    = uint32(102)
+	_OP_NOTIFY_RETRIEVE_CACHE = uint32(103)
+	_OP_NOTIFY_DELETE         = uint32(104) // protocol version 18
 
-	_OPCODE_COUNT = int32(105)
+	_OPCODE_COUNT = uint32(105)
 )
 
 ////////////////////////////////////////////////////////////////
@@ -86,11 +89,24 @@ func doInit(server *Server, req *request) {
 	server.reqMu.Lock()
 	server.kernelSettings = *input
 	server.kernelSettings.Flags = input.Flags & (CAP_ASYNC_READ | CAP_BIG_WRITES | CAP_FILE_OPS |
-		CAP_AUTO_INVAL_DATA | CAP_READDIRPLUS | CAP_NO_OPEN_SUPPORT | CAP_PARALLEL_DIROPS)
+		CAP_READDIRPLUS | CAP_NO_OPEN_SUPPORT | CAP_PARALLEL_DIROPS)
 
 	if server.opts.EnableLocks {
 		server.kernelSettings.Flags |= CAP_FLOCK_LOCKS | CAP_POSIX_LOCKS
 	}
+
+
+	dataCacheMode := input.Flags & CAP_AUTO_INVAL_DATA
+	if server.opts.ExplicitDataCacheControl {
+		// we don't want CAP_AUTO_INVAL_DATA even if we cannot go into fully explicit mode
+		dataCacheMode = 0
+
+		explicit := input.Flags & CAP_EXPLICIT_INVAL_DATA
+		if explicit != 0 {
+			dataCacheMode = explicit
+		}
+	}
+	server.kernelSettings.Flags |= dataCacheMode
 
 	if input.Minor >= 13 {
 		server.setSplice()
@@ -128,7 +144,7 @@ func doInit(server *Server, req *request) {
 
 func doOpen(server *Server, req *request) {
 	out := (*OpenOut)(req.outData())
-	status := server.fileSystem.Open((*OpenIn)(req.inData), out)
+	status := server.fileSystem.Open(req.cancel, (*OpenIn)(req.inData), out)
 	req.status = status
 	if status != OK {
 		return
@@ -137,7 +153,7 @@ func doOpen(server *Server, req *request) {
 
 func doCreate(server *Server, req *request) {
 	out := (*CreateOut)(req.outData())
-	status := server.fileSystem.Create((*CreateIn)(req.inData), req.filenames[0], out)
+	status := server.fileSystem.Create(req.cancel, (*CreateIn)(req.inData), req.filenames[0], out)
 	req.status = status
 }
 
@@ -146,7 +162,7 @@ func doReadDir(server *Server, req *request) {
 	buf := server.allocOut(req, in.Size)
 	out := NewDirEntryList(buf, uint64(in.Offset))
 
-	code := server.fileSystem.ReadDir(in, out)
+	code := server.fileSystem.ReadDir(req.cancel, in, out)
 	req.flatData = out.bytes()
 	req.status = code
 }
@@ -156,24 +172,24 @@ func doReadDirPlus(server *Server, req *request) {
 	buf := server.allocOut(req, in.Size)
 	out := NewDirEntryList(buf, uint64(in.Offset))
 
-	code := server.fileSystem.ReadDirPlus(in, out)
+	code := server.fileSystem.ReadDirPlus(req.cancel, in, out)
 	req.flatData = out.bytes()
 	req.status = code
 }
 
 func doOpenDir(server *Server, req *request) {
 	out := (*OpenOut)(req.outData())
-	status := server.fileSystem.OpenDir((*OpenIn)(req.inData), out)
+	status := server.fileSystem.OpenDir(req.cancel, (*OpenIn)(req.inData), out)
 	req.status = status
 }
 
 func doSetattr(server *Server, req *request) {
 	out := (*AttrOut)(req.outData())
-	req.status = server.fileSystem.SetAttr((*SetAttrIn)(req.inData), out)
+	req.status = server.fileSystem.SetAttr(req.cancel, (*SetAttrIn)(req.inData), out)
 }
 
 func doWrite(server *Server, req *request) {
-	n, status := server.fileSystem.Write((*WriteIn)(req.inData), req.arg)
+	n, status := server.fileSystem.Write(req.cancel, (*WriteIn)(req.inData), req.arg)
 	o := (*WriteOut)(req.outData())
 	o.Size = n
 	req.status = status
@@ -238,53 +254,34 @@ func doGetXAttr(server *Server, req *request) {
 
 	input := (*GetXAttrIn)(req.inData)
 
-	if input.Size == 0 {
-		out := (*GetXAttrOut)(req.outData())
-		switch req.inHeader.Opcode {
-		case _OP_GETXATTR:
-			// TODO(hanwen): double check this. For getxattr, input.Size
-			// field refers to the size of the attribute, so it usually
-			// is not 0.
-			sz, code := server.fileSystem.GetXAttrSize(req.inHeader, req.filenames[0])
-			if code.Ok() {
-				out.Size = uint32(sz)
-			}
-			req.status = code
-			return
-		case _OP_LISTXATTR:
-			data, code := server.fileSystem.ListXAttr(req.inHeader)
-			if code.Ok() {
-				out.Size = uint32(len(data))
-			}
-			req.status = code
-			return
-		}
-	}
-	var data []byte
+	req.flatData = server.allocOut(req, input.Size)
+	out := (*GetXAttrOut)(req.outData())
+
+	var n uint32
 	switch req.inHeader.Opcode {
 	case _OP_GETXATTR:
-		data, req.status = server.fileSystem.GetXAttrData(req.inHeader, req.filenames[0])
+		n, req.status = server.fileSystem.GetXAttr(req.cancel, req.inHeader, req.filenames[0], req.flatData)
 	case _OP_LISTXATTR:
-		data, req.status = server.fileSystem.ListXAttr(req.inHeader)
+		n, req.status = server.fileSystem.ListXAttr(req.cancel, req.inHeader, req.flatData)
 	default:
-		log.Panicf("xattr opcode %v", req.inHeader.Opcode)
 		req.status = ENOSYS
 	}
 
-	if len(data) > int(input.Size) {
-		req.status = ERANGE
+	if input.Size == 0 && req.status == ERANGE {
+		// For input.size==0, returning ERANGE is an error.
+		req.status = OK
+		out.Size = n
+	} else if req.status.Ok() {
+		req.flatData = req.flatData[:n]
+		out.Size = n
+	} else {
+		req.flatData = req.flatData[:0]
 	}
-
-	if !req.status.Ok() {
-		return
-	}
-
-	req.flatData = data
 }
 
 func doGetAttr(server *Server, req *request) {
 	out := (*AttrOut)(req.outData())
-	s := server.fileSystem.GetAttr((*GetAttrIn)(req.inData), out)
+	s := server.fileSystem.GetAttr(req.cancel, (*GetAttrIn)(req.inData), out)
 	req.status = s
 }
 
@@ -325,44 +322,44 @@ func doBatchForget(server *Server, req *request) {
 }
 
 func doReadlink(server *Server, req *request) {
-	req.flatData, req.status = server.fileSystem.Readlink(req.inHeader)
+	req.flatData, req.status = server.fileSystem.Readlink(req.cancel, req.inHeader)
 }
 
 func doLookup(server *Server, req *request) {
 	out := (*EntryOut)(req.outData())
-	s := server.fileSystem.Lookup(req.inHeader, req.filenames[0], out)
+	s := server.fileSystem.Lookup(req.cancel, req.inHeader, req.filenames[0], out)
 	req.status = s
 }
 
 func doMknod(server *Server, req *request) {
 	out := (*EntryOut)(req.outData())
 
-	req.status = server.fileSystem.Mknod((*MknodIn)(req.inData), req.filenames[0], out)
+	req.status = server.fileSystem.Mknod(req.cancel, (*MknodIn)(req.inData), req.filenames[0], out)
 }
 
 func doMkdir(server *Server, req *request) {
 	out := (*EntryOut)(req.outData())
-	req.status = server.fileSystem.Mkdir((*MkdirIn)(req.inData), req.filenames[0], out)
+	req.status = server.fileSystem.Mkdir(req.cancel, (*MkdirIn)(req.inData), req.filenames[0], out)
 }
 
 func doUnlink(server *Server, req *request) {
-	req.status = server.fileSystem.Unlink(req.inHeader, req.filenames[0])
+	req.status = server.fileSystem.Unlink(req.cancel, req.inHeader, req.filenames[0])
 }
 
 func doRmdir(server *Server, req *request) {
-	req.status = server.fileSystem.Rmdir(req.inHeader, req.filenames[0])
+	req.status = server.fileSystem.Rmdir(req.cancel, req.inHeader, req.filenames[0])
 }
 
 func doLink(server *Server, req *request) {
 	out := (*EntryOut)(req.outData())
-	req.status = server.fileSystem.Link((*LinkIn)(req.inData), req.filenames[0], out)
+	req.status = server.fileSystem.Link(req.cancel, (*LinkIn)(req.inData), req.filenames[0], out)
 }
 
 func doRead(server *Server, req *request) {
 	in := (*ReadIn)(req.inData)
 	buf := server.allocOut(req, in.Size)
 
-	req.readResult, req.status = server.fileSystem.Read(in, buf)
+	req.readResult, req.status = server.fileSystem.Read(req.cancel, in, buf)
 	if fd, ok := req.readResult.(*readResultFd); ok {
 		req.fdData = fd
 		req.flatData = nil
@@ -372,15 +369,15 @@ func doRead(server *Server, req *request) {
 }
 
 func doFlush(server *Server, req *request) {
-	req.status = server.fileSystem.Flush((*FlushIn)(req.inData))
+	req.status = server.fileSystem.Flush(req.cancel, (*FlushIn)(req.inData))
 }
 
 func doRelease(server *Server, req *request) {
-	server.fileSystem.Release((*ReleaseIn)(req.inData))
+	server.fileSystem.Release(req.cancel, (*ReleaseIn)(req.inData))
 }
 
 func doFsync(server *Server, req *request) {
-	req.status = server.fileSystem.Fsync((*FsyncIn)(req.inData))
+	req.status = server.fileSystem.Fsync(req.cancel, (*FsyncIn)(req.inData))
 }
 
 func doReleaseDir(server *Server, req *request) {
@@ -388,25 +385,25 @@ func doReleaseDir(server *Server, req *request) {
 }
 
 func doFsyncDir(server *Server, req *request) {
-	req.status = server.fileSystem.FsyncDir((*FsyncIn)(req.inData))
+	req.status = server.fileSystem.FsyncDir(req.cancel, (*FsyncIn)(req.inData))
 }
 
 func doSetXAttr(server *Server, req *request) {
 	splits := bytes.SplitN(req.arg, []byte{0}, 2)
-	req.status = server.fileSystem.SetXAttr((*SetXAttrIn)(req.inData), string(splits[0]), splits[1])
+	req.status = server.fileSystem.SetXAttr(req.cancel, (*SetXAttrIn)(req.inData), string(splits[0]), splits[1])
 }
 
 func doRemoveXAttr(server *Server, req *request) {
-	req.status = server.fileSystem.RemoveXAttr(req.inHeader, req.filenames[0])
+	req.status = server.fileSystem.RemoveXAttr(req.cancel, req.inHeader, req.filenames[0])
 }
 
 func doAccess(server *Server, req *request) {
-	req.status = server.fileSystem.Access((*AccessIn)(req.inData))
+	req.status = server.fileSystem.Access(req.cancel, (*AccessIn)(req.inData))
 }
 
 func doSymlink(server *Server, req *request) {
 	out := (*EntryOut)(req.outData())
-	req.status = server.fileSystem.Symlink(req.inHeader, req.filenames[1], req.filenames[0], out)
+	req.status = server.fileSystem.Symlink(req.cancel, req.inHeader, req.filenames[1], req.filenames[0], out)
 }
 
 func doRename(server *Server, req *request) {
@@ -415,16 +412,16 @@ func doRename(server *Server, req *request) {
 		InHeader: in1.InHeader,
 		Newdir:   in1.Newdir,
 	}
-	req.status = server.fileSystem.Rename(&in, req.filenames[0], req.filenames[1])
+	req.status = server.fileSystem.Rename(req.cancel, &in, req.filenames[0], req.filenames[1])
 }
 
 func doRename2(server *Server, req *request) {
-	req.status = server.fileSystem.Rename((*RenameIn)(req.inData), req.filenames[0], req.filenames[1])
+	req.status = server.fileSystem.Rename(req.cancel, (*RenameIn)(req.inData), req.filenames[0], req.filenames[1])
 }
 
 func doStatFs(server *Server, req *request) {
 	out := (*StatfsOut)(req.outData())
-	req.status = server.fileSystem.StatFs(req.inHeader, out)
+	req.status = server.fileSystem.StatFs(req.cancel, req.inHeader, out)
 	if req.status == ENOSYS && runtime.GOOS == "darwin" {
 		// OSX FUSE requires Statfs to be implemented for the
 		// mount to succeed.
@@ -442,19 +439,52 @@ func doDestroy(server *Server, req *request) {
 }
 
 func doFallocate(server *Server, req *request) {
-	req.status = server.fileSystem.Fallocate((*FallocateIn)(req.inData))
+	req.status = server.fileSystem.Fallocate(req.cancel, (*FallocateIn)(req.inData))
 }
 
 func doGetLk(server *Server, req *request) {
-	req.status = server.fileSystem.GetLk((*LkIn)(req.inData), (*LkOut)(req.outData()))
+	req.status = server.fileSystem.GetLk(req.cancel, (*LkIn)(req.inData), (*LkOut)(req.outData()))
 }
 
 func doSetLk(server *Server, req *request) {
-	req.status = server.fileSystem.SetLk((*LkIn)(req.inData))
+	req.status = server.fileSystem.SetLk(req.cancel, (*LkIn)(req.inData))
 }
 
 func doSetLkw(server *Server, req *request) {
-	req.status = server.fileSystem.SetLkw((*LkIn)(req.inData))
+	req.status = server.fileSystem.SetLkw(req.cancel, (*LkIn)(req.inData))
+}
+
+func doLseek(server *Server, req *request) {
+	in := (*LseekIn)(req.inData)
+	out := (*LseekOut)(req.outData())
+	req.status = server.fileSystem.Lseek(req.cancel, in, out)
+}
+
+func doCopyFileRange(server *Server, req *request) {
+	in := (*CopyFileRangeIn)(req.inData)
+	out := (*WriteOut)(req.outData())
+
+	out.Size, req.status = server.fileSystem.CopyFileRange(req.cancel, in)
+}
+
+func doInterrupt(server *Server, req *request) {
+	input := (*InterruptIn)(req.inData)
+	server.reqMu.Lock()
+	defer server.reqMu.Unlock()
+
+	// This is slow, but this operation is rare.
+	for _, inflight := range server.reqInflight {
+		if input.Unique == inflight.inHeader.Unique && !inflight.interrupted {
+			close(inflight.cancel)
+			inflight.interrupted = true
+			req.status = OK
+			return
+		}
+	}
+
+	// not found; wait for a bit
+	time.Sleep(10 * time.Microsecond)
+	req.status = EAGAIN
 }
 
 ////////////////////////////////////////////////////////////////
@@ -475,7 +505,7 @@ type operationHandler struct {
 
 var operationHandlers []*operationHandler
 
-func operationName(op int32) string {
+func operationName(op uint32) string {
 	h := getHandler(op)
 	if h == nil {
 		return "unknown"
@@ -483,7 +513,7 @@ func operationName(op int32) string {
 	return h.Name
 }
 
-func getHandler(o int32) *operationHandler {
+func getHandler(o uint32) *operationHandler {
 	if o >= _OPCODE_COUNT {
 		return nil
 	}
@@ -496,52 +526,54 @@ func init() {
 		operationHandlers[i] = &operationHandler{Name: fmt.Sprintf("OPCODE-%d", i)}
 	}
 
-	fileOps := []int32{_OP_READLINK, _OP_NOTIFY_INVAL_ENTRY, _OP_NOTIFY_DELETE}
+	fileOps := []uint32{_OP_READLINK, _OP_NOTIFY_INVAL_ENTRY, _OP_NOTIFY_DELETE}
 	for _, op := range fileOps {
 		operationHandlers[op].FileNameOut = true
 	}
 
-	for op, sz := range map[int32]uintptr{
-		_OP_FORGET:       unsafe.Sizeof(ForgetIn{}),
-		_OP_BATCH_FORGET: unsafe.Sizeof(_BatchForgetIn{}),
-		_OP_GETATTR:      unsafe.Sizeof(GetAttrIn{}),
-		_OP_SETATTR:      unsafe.Sizeof(SetAttrIn{}),
-		_OP_MKNOD:        unsafe.Sizeof(MknodIn{}),
-		_OP_MKDIR:        unsafe.Sizeof(MkdirIn{}),
-		_OP_RENAME:       unsafe.Sizeof(Rename1In{}),
-		_OP_LINK:         unsafe.Sizeof(LinkIn{}),
-		_OP_OPEN:         unsafe.Sizeof(OpenIn{}),
-		_OP_READ:         unsafe.Sizeof(ReadIn{}),
-		_OP_WRITE:        unsafe.Sizeof(WriteIn{}),
-		_OP_RELEASE:      unsafe.Sizeof(ReleaseIn{}),
-		_OP_FSYNC:        unsafe.Sizeof(FsyncIn{}),
-		_OP_SETXATTR:     unsafe.Sizeof(SetXAttrIn{}),
-		_OP_GETXATTR:     unsafe.Sizeof(GetXAttrIn{}),
-		_OP_LISTXATTR:    unsafe.Sizeof(GetXAttrIn{}),
-		_OP_FLUSH:        unsafe.Sizeof(FlushIn{}),
-		_OP_INIT:         unsafe.Sizeof(InitIn{}),
-		_OP_OPENDIR:      unsafe.Sizeof(OpenIn{}),
-		_OP_READDIR:      unsafe.Sizeof(ReadIn{}),
-		_OP_RELEASEDIR:   unsafe.Sizeof(ReleaseIn{}),
-		_OP_FSYNCDIR:     unsafe.Sizeof(FsyncIn{}),
-		_OP_GETLK:        unsafe.Sizeof(LkIn{}),
-		_OP_SETLK:        unsafe.Sizeof(LkIn{}),
-		_OP_SETLKW:       unsafe.Sizeof(LkIn{}),
-		_OP_ACCESS:       unsafe.Sizeof(AccessIn{}),
-		_OP_CREATE:       unsafe.Sizeof(CreateIn{}),
-		_OP_INTERRUPT:    unsafe.Sizeof(InterruptIn{}),
-		_OP_BMAP:         unsafe.Sizeof(_BmapIn{}),
-		_OP_IOCTL:        unsafe.Sizeof(_IoctlIn{}),
-		_OP_POLL:         unsafe.Sizeof(_PollIn{}),
-		_OP_NOTIFY_REPLY: unsafe.Sizeof(NotifyRetrieveIn{}),
-		_OP_FALLOCATE:    unsafe.Sizeof(FallocateIn{}),
-		_OP_READDIRPLUS:  unsafe.Sizeof(ReadIn{}),
-		_OP_RENAME2:      unsafe.Sizeof(RenameIn{}),
+	for op, sz := range map[uint32]uintptr{
+		_OP_FORGET:          unsafe.Sizeof(ForgetIn{}),
+		_OP_BATCH_FORGET:    unsafe.Sizeof(_BatchForgetIn{}),
+		_OP_GETATTR:         unsafe.Sizeof(GetAttrIn{}),
+		_OP_SETATTR:         unsafe.Sizeof(SetAttrIn{}),
+		_OP_MKNOD:           unsafe.Sizeof(MknodIn{}),
+		_OP_MKDIR:           unsafe.Sizeof(MkdirIn{}),
+		_OP_RENAME:          unsafe.Sizeof(Rename1In{}),
+		_OP_LINK:            unsafe.Sizeof(LinkIn{}),
+		_OP_OPEN:            unsafe.Sizeof(OpenIn{}),
+		_OP_READ:            unsafe.Sizeof(ReadIn{}),
+		_OP_WRITE:           unsafe.Sizeof(WriteIn{}),
+		_OP_RELEASE:         unsafe.Sizeof(ReleaseIn{}),
+		_OP_FSYNC:           unsafe.Sizeof(FsyncIn{}),
+		_OP_SETXATTR:        unsafe.Sizeof(SetXAttrIn{}),
+		_OP_GETXATTR:        unsafe.Sizeof(GetXAttrIn{}),
+		_OP_LISTXATTR:       unsafe.Sizeof(GetXAttrIn{}),
+		_OP_FLUSH:           unsafe.Sizeof(FlushIn{}),
+		_OP_INIT:            unsafe.Sizeof(InitIn{}),
+		_OP_OPENDIR:         unsafe.Sizeof(OpenIn{}),
+		_OP_READDIR:         unsafe.Sizeof(ReadIn{}),
+		_OP_RELEASEDIR:      unsafe.Sizeof(ReleaseIn{}),
+		_OP_FSYNCDIR:        unsafe.Sizeof(FsyncIn{}),
+		_OP_GETLK:           unsafe.Sizeof(LkIn{}),
+		_OP_SETLK:           unsafe.Sizeof(LkIn{}),
+		_OP_SETLKW:          unsafe.Sizeof(LkIn{}),
+		_OP_ACCESS:          unsafe.Sizeof(AccessIn{}),
+		_OP_CREATE:          unsafe.Sizeof(CreateIn{}),
+		_OP_INTERRUPT:       unsafe.Sizeof(InterruptIn{}),
+		_OP_BMAP:            unsafe.Sizeof(_BmapIn{}),
+		_OP_IOCTL:           unsafe.Sizeof(_IoctlIn{}),
+		_OP_POLL:            unsafe.Sizeof(_PollIn{}),
+		_OP_NOTIFY_REPLY:    unsafe.Sizeof(NotifyRetrieveIn{}),
+		_OP_FALLOCATE:       unsafe.Sizeof(FallocateIn{}),
+		_OP_READDIRPLUS:     unsafe.Sizeof(ReadIn{}),
+		_OP_RENAME2:         unsafe.Sizeof(RenameIn{}),
+		_OP_LSEEK:           unsafe.Sizeof(LseekIn{}),
+		_OP_COPY_FILE_RANGE: unsafe.Sizeof(CopyFileRangeIn{}),
 	} {
 		operationHandlers[op].InputSize = sz
 	}
 
-	for op, sz := range map[int32]uintptr{
+	for op, sz := range map[uint32]uintptr{
 		_OP_LOOKUP:                unsafe.Sizeof(EntryOut{}),
 		_OP_GETATTR:               unsafe.Sizeof(AttrOut{}),
 		_OP_SETATTR:               unsafe.Sizeof(AttrOut{}),
@@ -566,11 +598,13 @@ func init() {
 		_OP_NOTIFY_STORE_CACHE:    unsafe.Sizeof(NotifyStoreOut{}),
 		_OP_NOTIFY_RETRIEVE_CACHE: unsafe.Sizeof(NotifyRetrieveOut{}),
 		_OP_NOTIFY_DELETE:         unsafe.Sizeof(NotifyInvalDeleteOut{}),
+		_OP_LSEEK:                 unsafe.Sizeof(LseekOut{}),
+		_OP_COPY_FILE_RANGE:       unsafe.Sizeof(WriteOut{}),
 	} {
 		operationHandlers[op].OutputSize = sz
 	}
 
-	for op, v := range map[int32]string{
+	for op, v := range map[uint32]string{
 		_OP_LOOKUP:                "LOOKUP",
 		_OP_FORGET:                "FORGET",
 		_OP_BATCH_FORGET:          "BATCH_FORGET",
@@ -619,57 +653,62 @@ func init() {
 		_OP_FALLOCATE:             "FALLOCATE",
 		_OP_READDIRPLUS:           "READDIRPLUS",
 		_OP_RENAME2:               "RENAME2",
+		_OP_LSEEK:                 "LSEEK",
+		_OP_COPY_FILE_RANGE:       "COPY_FILE_RANGE",
 	} {
 		operationHandlers[op].Name = v
 	}
 
-	for op, v := range map[int32]operationFunc{
-		_OP_OPEN:         doOpen,
-		_OP_READDIR:      doReadDir,
-		_OP_WRITE:        doWrite,
-		_OP_OPENDIR:      doOpenDir,
-		_OP_CREATE:       doCreate,
-		_OP_SETATTR:      doSetattr,
-		_OP_GETXATTR:     doGetXAttr,
-		_OP_LISTXATTR:    doGetXAttr,
-		_OP_GETATTR:      doGetAttr,
-		_OP_FORGET:       doForget,
-		_OP_BATCH_FORGET: doBatchForget,
-		_OP_READLINK:     doReadlink,
-		_OP_INIT:         doInit,
-		_OP_LOOKUP:       doLookup,
-		_OP_MKNOD:        doMknod,
-		_OP_MKDIR:        doMkdir,
-		_OP_UNLINK:       doUnlink,
-		_OP_RMDIR:        doRmdir,
-		_OP_LINK:         doLink,
-		_OP_READ:         doRead,
-		_OP_FLUSH:        doFlush,
-		_OP_RELEASE:      doRelease,
-		_OP_FSYNC:        doFsync,
-		_OP_RELEASEDIR:   doReleaseDir,
-		_OP_FSYNCDIR:     doFsyncDir,
-		_OP_SETXATTR:     doSetXAttr,
-		_OP_REMOVEXATTR:  doRemoveXAttr,
-		_OP_GETLK:        doGetLk,
-		_OP_SETLK:        doSetLk,
-		_OP_SETLKW:       doSetLkw,
-		_OP_ACCESS:       doAccess,
-		_OP_SYMLINK:      doSymlink,
-		_OP_RENAME:       doRename,
-		_OP_STATFS:       doStatFs,
-		_OP_IOCTL:        doIoctl,
-		_OP_DESTROY:      doDestroy,
-		_OP_NOTIFY_REPLY: doNotifyReply,
-		_OP_FALLOCATE:    doFallocate,
-		_OP_READDIRPLUS:  doReadDirPlus,
-		_OP_RENAME2:      doRename2,
+	for op, v := range map[uint32]operationFunc{
+		_OP_OPEN:            doOpen,
+		_OP_READDIR:         doReadDir,
+		_OP_WRITE:           doWrite,
+		_OP_OPENDIR:         doOpenDir,
+		_OP_CREATE:          doCreate,
+		_OP_SETATTR:         doSetattr,
+		_OP_GETXATTR:        doGetXAttr,
+		_OP_LISTXATTR:       doGetXAttr,
+		_OP_GETATTR:         doGetAttr,
+		_OP_FORGET:          doForget,
+		_OP_BATCH_FORGET:    doBatchForget,
+		_OP_READLINK:        doReadlink,
+		_OP_INIT:            doInit,
+		_OP_LOOKUP:          doLookup,
+		_OP_MKNOD:           doMknod,
+		_OP_MKDIR:           doMkdir,
+		_OP_UNLINK:          doUnlink,
+		_OP_RMDIR:           doRmdir,
+		_OP_LINK:            doLink,
+		_OP_READ:            doRead,
+		_OP_FLUSH:           doFlush,
+		_OP_RELEASE:         doRelease,
+		_OP_FSYNC:           doFsync,
+		_OP_RELEASEDIR:      doReleaseDir,
+		_OP_FSYNCDIR:        doFsyncDir,
+		_OP_SETXATTR:        doSetXAttr,
+		_OP_REMOVEXATTR:     doRemoveXAttr,
+		_OP_GETLK:           doGetLk,
+		_OP_SETLK:           doSetLk,
+		_OP_SETLKW:          doSetLkw,
+		_OP_ACCESS:          doAccess,
+		_OP_SYMLINK:         doSymlink,
+		_OP_RENAME:          doRename,
+		_OP_STATFS:          doStatFs,
+		_OP_IOCTL:           doIoctl,
+		_OP_DESTROY:         doDestroy,
+		_OP_NOTIFY_REPLY:    doNotifyReply,
+		_OP_FALLOCATE:       doFallocate,
+		_OP_READDIRPLUS:     doReadDirPlus,
+		_OP_RENAME2:         doRename2,
+		_OP_INTERRUPT:       doInterrupt,
+		_OP_COPY_FILE_RANGE: doCopyFileRange,
+		_OP_LSEEK:           doLseek,
 	} {
 		operationHandlers[op].Func = v
 	}
 
 	// Outputs.
-	for op, f := range map[int32]castPointerFunc{
+	for op, f := range map[uint32]castPointerFunc{
 		_OP_LOOKUP:                func(ptr unsafe.Pointer) interface{} { return (*EntryOut)(ptr) },
 		_OP_OPEN:                  func(ptr unsafe.Pointer) interface{} { return (*OpenOut)(ptr) },
 		_OP_OPENDIR:               func(ptr unsafe.Pointer) interface{} { return (*OpenOut)(ptr) },
@@ -687,46 +726,52 @@ func init() {
 		_OP_STATFS:                func(ptr unsafe.Pointer) interface{} { return (*StatfsOut)(ptr) },
 		_OP_SYMLINK:               func(ptr unsafe.Pointer) interface{} { return (*EntryOut)(ptr) },
 		_OP_GETLK:                 func(ptr unsafe.Pointer) interface{} { return (*LkOut)(ptr) },
+		_OP_LSEEK:                 func(ptr unsafe.Pointer) interface{} { return (*LseekOut)(ptr) },
+		_OP_COPY_FILE_RANGE:       func(ptr unsafe.Pointer) interface{} { return (*WriteOut)(ptr) },
 	} {
 		operationHandlers[op].DecodeOut = f
 	}
 
 	// Inputs.
-	for op, f := range map[int32]castPointerFunc{
-		_OP_FLUSH:        func(ptr unsafe.Pointer) interface{} { return (*FlushIn)(ptr) },
-		_OP_GETATTR:      func(ptr unsafe.Pointer) interface{} { return (*GetAttrIn)(ptr) },
-		_OP_SETXATTR:     func(ptr unsafe.Pointer) interface{} { return (*SetXAttrIn)(ptr) },
-		_OP_GETXATTR:     func(ptr unsafe.Pointer) interface{} { return (*GetXAttrIn)(ptr) },
-		_OP_LISTXATTR:    func(ptr unsafe.Pointer) interface{} { return (*GetXAttrIn)(ptr) },
-		_OP_SETATTR:      func(ptr unsafe.Pointer) interface{} { return (*SetAttrIn)(ptr) },
-		_OP_INIT:         func(ptr unsafe.Pointer) interface{} { return (*InitIn)(ptr) },
-		_OP_IOCTL:        func(ptr unsafe.Pointer) interface{} { return (*_IoctlIn)(ptr) },
-		_OP_OPEN:         func(ptr unsafe.Pointer) interface{} { return (*OpenIn)(ptr) },
-		_OP_MKNOD:        func(ptr unsafe.Pointer) interface{} { return (*MknodIn)(ptr) },
-		_OP_CREATE:       func(ptr unsafe.Pointer) interface{} { return (*CreateIn)(ptr) },
-		_OP_READ:         func(ptr unsafe.Pointer) interface{} { return (*ReadIn)(ptr) },
-		_OP_READDIR:      func(ptr unsafe.Pointer) interface{} { return (*ReadIn)(ptr) },
-		_OP_ACCESS:       func(ptr unsafe.Pointer) interface{} { return (*AccessIn)(ptr) },
-		_OP_FORGET:       func(ptr unsafe.Pointer) interface{} { return (*ForgetIn)(ptr) },
-		_OP_BATCH_FORGET: func(ptr unsafe.Pointer) interface{} { return (*_BatchForgetIn)(ptr) },
-		_OP_LINK:         func(ptr unsafe.Pointer) interface{} { return (*LinkIn)(ptr) },
-		_OP_MKDIR:        func(ptr unsafe.Pointer) interface{} { return (*MkdirIn)(ptr) },
-		_OP_RELEASE:      func(ptr unsafe.Pointer) interface{} { return (*ReleaseIn)(ptr) },
-		_OP_RELEASEDIR:   func(ptr unsafe.Pointer) interface{} { return (*ReleaseIn)(ptr) },
-		_OP_FALLOCATE:    func(ptr unsafe.Pointer) interface{} { return (*FallocateIn)(ptr) },
-		_OP_NOTIFY_REPLY: func(ptr unsafe.Pointer) interface{} { return (*NotifyRetrieveIn)(ptr) },
-		_OP_READDIRPLUS:  func(ptr unsafe.Pointer) interface{} { return (*ReadIn)(ptr) },
-		_OP_RENAME:       func(ptr unsafe.Pointer) interface{} { return (*Rename1In)(ptr) },
-		_OP_GETLK:        func(ptr unsafe.Pointer) interface{} { return (*LkIn)(ptr) },
-		_OP_SETLK:        func(ptr unsafe.Pointer) interface{} { return (*LkIn)(ptr) },
-		_OP_SETLKW:       func(ptr unsafe.Pointer) interface{} { return (*LkIn)(ptr) },
-		_OP_RENAME2:      func(ptr unsafe.Pointer) interface{} { return (*RenameIn)(ptr) },
+	for op, f := range map[uint32]castPointerFunc{
+		_OP_FLUSH:           func(ptr unsafe.Pointer) interface{} { return (*FlushIn)(ptr) },
+		_OP_GETATTR:         func(ptr unsafe.Pointer) interface{} { return (*GetAttrIn)(ptr) },
+		_OP_SETXATTR:        func(ptr unsafe.Pointer) interface{} { return (*SetXAttrIn)(ptr) },
+		_OP_GETXATTR:        func(ptr unsafe.Pointer) interface{} { return (*GetXAttrIn)(ptr) },
+		_OP_LISTXATTR:       func(ptr unsafe.Pointer) interface{} { return (*GetXAttrIn)(ptr) },
+		_OP_SETATTR:         func(ptr unsafe.Pointer) interface{} { return (*SetAttrIn)(ptr) },
+		_OP_INIT:            func(ptr unsafe.Pointer) interface{} { return (*InitIn)(ptr) },
+		_OP_IOCTL:           func(ptr unsafe.Pointer) interface{} { return (*_IoctlIn)(ptr) },
+		_OP_OPEN:            func(ptr unsafe.Pointer) interface{} { return (*OpenIn)(ptr) },
+		_OP_MKNOD:           func(ptr unsafe.Pointer) interface{} { return (*MknodIn)(ptr) },
+		_OP_CREATE:          func(ptr unsafe.Pointer) interface{} { return (*CreateIn)(ptr) },
+		_OP_READ:            func(ptr unsafe.Pointer) interface{} { return (*ReadIn)(ptr) },
+		_OP_WRITE:           func(ptr unsafe.Pointer) interface{} { return (*WriteIn)(ptr) },
+		_OP_READDIR:         func(ptr unsafe.Pointer) interface{} { return (*ReadIn)(ptr) },
+		_OP_ACCESS:          func(ptr unsafe.Pointer) interface{} { return (*AccessIn)(ptr) },
+		_OP_FORGET:          func(ptr unsafe.Pointer) interface{} { return (*ForgetIn)(ptr) },
+		_OP_BATCH_FORGET:    func(ptr unsafe.Pointer) interface{} { return (*_BatchForgetIn)(ptr) },
+		_OP_LINK:            func(ptr unsafe.Pointer) interface{} { return (*LinkIn)(ptr) },
+		_OP_MKDIR:           func(ptr unsafe.Pointer) interface{} { return (*MkdirIn)(ptr) },
+		_OP_RELEASE:         func(ptr unsafe.Pointer) interface{} { return (*ReleaseIn)(ptr) },
+		_OP_RELEASEDIR:      func(ptr unsafe.Pointer) interface{} { return (*ReleaseIn)(ptr) },
+		_OP_FALLOCATE:       func(ptr unsafe.Pointer) interface{} { return (*FallocateIn)(ptr) },
+		_OP_NOTIFY_REPLY:    func(ptr unsafe.Pointer) interface{} { return (*NotifyRetrieveIn)(ptr) },
+		_OP_READDIRPLUS:     func(ptr unsafe.Pointer) interface{} { return (*ReadIn)(ptr) },
+		_OP_RENAME:          func(ptr unsafe.Pointer) interface{} { return (*Rename1In)(ptr) },
+		_OP_GETLK:           func(ptr unsafe.Pointer) interface{} { return (*LkIn)(ptr) },
+		_OP_SETLK:           func(ptr unsafe.Pointer) interface{} { return (*LkIn)(ptr) },
+		_OP_SETLKW:          func(ptr unsafe.Pointer) interface{} { return (*LkIn)(ptr) },
+		_OP_RENAME2:         func(ptr unsafe.Pointer) interface{} { return (*RenameIn)(ptr) },
+		_OP_INTERRUPT:       func(ptr unsafe.Pointer) interface{} { return (*InterruptIn)(ptr) },
+		_OP_LSEEK:           func(ptr unsafe.Pointer) interface{} { return (*LseekIn)(ptr) },
+		_OP_COPY_FILE_RANGE: func(ptr unsafe.Pointer) interface{} { return (*CopyFileRangeIn)(ptr) },
 	} {
 		operationHandlers[op].DecodeIn = f
 	}
 
 	// File name args.
-	for op, count := range map[int32]int{
+	for op, count := range map[uint32]int{
 		_OP_CREATE:      1,
 		_OP_SETXATTR:    1,
 		_OP_GETXATTR:    1,

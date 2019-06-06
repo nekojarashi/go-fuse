@@ -10,9 +10,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/hanwen/go-fuse/fuse"
-	"github.com/hanwen/go-fuse/fuse/nodefs"
-	"github.com/hanwen/go-fuse/internal/testutil"
+	"github.com/nekojarashi/go-fuse/fuse"
+	"github.com/nekojarashi/go-fuse/fuse/nodefs"
+	"github.com/nekojarashi/go-fuse/internal/testutil"
 )
 
 // exercise functionality when open returns 0 file handle.

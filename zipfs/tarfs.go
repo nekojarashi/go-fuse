@@ -9,11 +9,16 @@ import (
 	"bytes"
 	"compress/bzip2"
 	"compress/gzip"
-	"github.com/nekojarashi/go-fuse/fuse"
+	"context"
 	"io"
+	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/nekojarashi/go-fuse/fs"
+	"github.com/nekojarashi/go-fuse/fuse"
 )
 
 // TODO - handle symlinks.
@@ -26,23 +31,14 @@ func HeaderToFileInfo(out *fuse.Attr, h *tar.Header) {
 	out.SetTimes(&h.AccessTime, &h.ModTime, &h.ChangeTime)
 }
 
-type TarFile struct {
-	data []byte
-	tar.Header
+type tarRoot struct {
+	fs.Inode
+	rc io.ReadCloser
 }
 
-func (f *TarFile) Stat(out *fuse.Attr) {
-	HeaderToFileInfo(out, &f.Header)
-	out.Mode |= syscall.S_IFREG
-}
-
-func (f *TarFile) Data() []byte {
-	return f.data
-}
-
-func NewTarTree(r io.Reader) map[string]MemFile {
-	files := map[string]MemFile{}
-	tr := tar.NewReader(r)
+func (r *tarRoot) OnAdd(ctx context.Context) {
+	tr := tar.NewReader(r.rc)
+	defer r.rc.Close()
 
 	var longName *string
 	for {
@@ -52,9 +48,10 @@ func NewTarTree(r io.Reader) map[string]MemFile {
 			break
 		}
 		if err != nil {
-			// handle error
+			log.Printf("Add: %v", err)
+			// XXX handle error
+			break
 		}
-
 		if hdr.Typeflag == 'L' {
 			buf := bytes.NewBuffer(make([]byte, 0, hdr.Size))
 			io.Copy(buf, tr)
@@ -68,41 +65,99 @@ func NewTarTree(r io.Reader) map[string]MemFile {
 			longName = nil
 		}
 
-		if strings.HasSuffix(hdr.Name, "/") {
-			continue
-		}
-
 		buf := bytes.NewBuffer(make([]byte, 0, hdr.Size))
 		io.Copy(buf, tr)
+		dir, base := filepath.Split(filepath.Clean(hdr.Name))
 
-		files[hdr.Name] = &TarFile{
-			Header: *hdr,
-			data:   buf.Bytes(),
+		p := r.EmbeddedInode()
+		for _, comp := range strings.Split(dir, "/") {
+			if len(comp) == 0 {
+				continue
+			}
+			ch := p.GetChild(comp)
+			if ch == nil {
+				ch = p.NewPersistentInode(ctx,
+					&fs.Inode{},
+					fs.StableAttr{Mode: syscall.S_IFDIR})
+				p.AddChild(comp, ch, false)
+			}
+			p = ch
+		}
+
+		var attr fuse.Attr
+		HeaderToFileInfo(&attr, hdr)
+		switch hdr.Typeflag {
+		case tar.TypeSymlink:
+			l := &fs.MemSymlink{
+				Data: []byte(hdr.Linkname),
+			}
+			l.Attr = attr
+			p.AddChild(base, r.NewPersistentInode(ctx, l, fs.StableAttr{Mode: syscall.S_IFLNK}), false)
+
+		case tar.TypeLink:
+			log.Println("don't know how to handle Typelink")
+
+		case tar.TypeChar:
+			rf := &fs.MemRegularFile{}
+			rf.Attr = attr
+			p.AddChild(base, r.NewPersistentInode(ctx, rf, fs.StableAttr{Mode: syscall.S_IFCHR}), false)
+		case tar.TypeBlock:
+			rf := &fs.MemRegularFile{}
+			rf.Attr = attr
+			p.AddChild(base, r.NewPersistentInode(ctx, rf, fs.StableAttr{Mode: syscall.S_IFBLK}), false)
+		case tar.TypeDir:
+			rf := &fs.MemRegularFile{}
+			rf.Attr = attr
+			p.AddChild(base, r.NewPersistentInode(ctx, rf, fs.StableAttr{Mode: syscall.S_IFDIR}), false)
+		case tar.TypeFifo:
+			rf := &fs.MemRegularFile{}
+			rf.Attr = attr
+			p.AddChild(base, r.NewPersistentInode(ctx, rf, fs.StableAttr{Mode: syscall.S_IFIFO}), false)
+		case tar.TypeReg, tar.TypeRegA:
+			df := &fs.MemRegularFile{
+				Data: buf.Bytes(),
+			}
+			df.Attr = attr
+			p.AddChild(base, r.NewPersistentInode(ctx, df, fs.StableAttr{}), false)
+		default:
+			log.Printf("entry %q: unsupported type '%c'", hdr.Name, hdr.Typeflag)
 		}
 	}
-	return files
 }
 
-func NewTarCompressedTree(name string, format string) (map[string]MemFile, error) {
+type readCloser struct {
+	io.Reader
+	close func() error
+}
+
+func (rc *readCloser) Close() error {
+	return rc.close()
+}
+
+func NewTarCompressedTree(name string, format string) (fs.InodeEmbedder, error) {
 	f, err := os.Open(name)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
 
-	var stream io.Reader
+	var stream io.ReadCloser
 	switch format {
 	case "gz":
 		unzip, err := gzip.NewReader(f)
 		if err != nil {
 			return nil, err
 		}
-		defer unzip.Close()
-		stream = unzip
+		stream = &readCloser{
+			unzip,
+			f.Close,
+		}
 	case "bz2":
 		unzip := bzip2.NewReader(f)
-		stream = unzip
+		stream = &readCloser{
+			unzip,
+			f.Close,
+		}
 	}
 
-	return NewTarTree(stream), nil
+	return &tarRoot{rc: stream}, nil
 }

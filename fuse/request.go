@@ -17,6 +17,13 @@ var sizeOfOutHeader = unsafe.Sizeof(OutHeader{})
 var zeroOutBuf [outputHeaderSize]byte
 
 type request struct {
+	inflightIndex int
+
+	cancel chan struct{}
+
+	// written under Server.reqMu
+	interrupted bool
+
 	inputBuf []byte
 
 	// These split up inputBuf.
@@ -54,8 +61,6 @@ type request struct {
 
 	// Input, if small enough to fit here.
 	smallInputBuf [128]byte
-
-	context Context
 }
 
 func (r *request) clear() {
@@ -74,7 +79,7 @@ func (r *request) clear() {
 
 func (r *request) InputDebug() string {
 	val := ""
-	if r.handler.DecodeIn != nil {
+	if r.handler != nil && r.handler.DecodeIn != nil {
 		val = fmt.Sprintf("%v ", Print(r.handler.DecodeIn(r.inData)))
 	}
 
@@ -94,7 +99,7 @@ func (r *request) InputDebug() string {
 
 func (r *request) OutputDebug() string {
 	var dataStr string
-	if r.handler.DecodeOut != nil && r.handler.OutputSize > 0 {
+	if r.handler != nil && r.handler.DecodeOut != nil && r.handler.OutputSize > 0 {
 		dataStr = Print(r.handler.DecodeOut(r.outData()))
 	}
 
@@ -105,7 +110,7 @@ func (r *request) OutputDebug() string {
 
 	flatStr := ""
 	if r.flatDataSize() > 0 {
-		if r.handler.FileNameOut {
+		if r.handler != nil && r.handler.FileNameOut {
 			s := strings.TrimRight(string(r.flatData), "\x00")
 			flatStr = fmt.Sprintf(" %q", s)
 		} else {
@@ -146,16 +151,18 @@ func (r *request) setInput(input []byte) bool {
 	return true
 }
 
-func (r *request) parse() {
-	inHSize := int(unsafe.Sizeof(InHeader{}))
-	if len(r.inputBuf) < inHSize {
+func (r *request) parseHeader() Status {
+	if len(r.inputBuf) < int(unsafe.Sizeof(InHeader{})) {
 		log.Printf("Short read for input header: %v", r.inputBuf)
-		return
+		return EINVAL
 	}
 
 	r.inHeader = (*InHeader)(unsafe.Pointer(&r.inputBuf[0]))
-	r.arg = r.inputBuf[:]
+	return OK
+}
 
+func (r *request) parse() {
+	r.arg = r.inputBuf[:]
 	r.handler = getHandler(r.inHeader.Opcode)
 	if r.handler == nil {
 		log.Printf("Unknown opcode %d", r.inHeader.Opcode)
@@ -173,7 +180,7 @@ func (r *request) parse() {
 		r.inData = unsafe.Pointer(&r.arg[0])
 		r.arg = r.arg[r.handler.InputSize:]
 	} else {
-		r.arg = r.arg[inHSize:]
+		r.arg = r.arg[unsafe.Sizeof(InHeader{}):]
 	}
 
 	count := r.handler.FileNames
@@ -200,6 +207,7 @@ func (r *request) parse() {
 
 	copy(r.outBuf[:r.handler.OutputSize+sizeOfOutHeader],
 		zeroOutBuf[:r.handler.OutputSize+sizeOfOutHeader])
+
 }
 
 func (r *request) outData() unsafe.Pointer {
@@ -209,8 +217,14 @@ func (r *request) outData() unsafe.Pointer {
 // serializeHeader serializes the response header. The header points
 // to an internal buffer of the receiver.
 func (r *request) serializeHeader(flatDataSize int) (header []byte) {
-	dataLength := r.handler.OutputSize
+	var dataLength uintptr
+
+	if r.handler != nil {
+		dataLength = r.handler.OutputSize
+	}
 	if r.status > OK {
+		// only do this for positive status; negative status
+		// is used for notification.
 		dataLength = 0
 	}
 

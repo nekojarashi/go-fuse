@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
-	"github.com/nekojarashi/go-fuse/fuse/nodefs"
-	"github.com/nekojarashi/go-fuse/fuse/pathfs"
+	"github.com/nekojarashi/go-fuse/fs"
 	"github.com/nekojarashi/go-fuse/zipfs"
 )
 
@@ -25,15 +25,19 @@ func main() {
 		os.Exit(2)
 	}
 
-	fs := zipfs.NewMultiZipFs()
-	nfs := pathfs.NewPathNodeFs(fs, nil)
-	opts := nodefs.NewOptions()
+	root := &zipfs.MultiZipFs{}
+	sec := time.Second
+	opts := fs.Options{
+		EntryTimeout:       &sec,
+		AttrTimeout:        &sec,
+		DefaultPermissions: true,
+	}
 	opts.Debug = *debug
-	state, _, err := nodefs.MountRoot(flag.Arg(0), nfs.Root(), opts)
+	server, err := fs.Mount(flag.Arg(0), root, &opts)
 	if err != nil {
 		fmt.Printf("Mount fail: %v\n", err)
 		os.Exit(1)
 	}
 
-	state.Serve()
+	server.Serve()
 }

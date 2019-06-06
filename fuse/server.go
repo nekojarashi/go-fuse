@@ -39,6 +39,9 @@ type Server struct {
 
 	opts *MountOptions
 
+	// Pools for []byte
+	buffers bufferPool
+
 	// Pool for request structs.
 	reqPool sync.Pool
 
@@ -46,6 +49,7 @@ type Server struct {
 	readPool       sync.Pool
 	reqMu          sync.Mutex
 	reqReaders     int
+	reqInflight    []*request
 	kernelSettings InitIn
 
 	// in-flight notify-retrieve queries
@@ -58,6 +62,9 @@ type Server struct {
 	loops        sync.WaitGroup
 
 	ready chan error
+
+	// for implementing single threaded processing.
+	requestProcessingMu sync.Mutex
 }
 
 // SetDebug is deprecated. Use MountOptions.Debug instead.
@@ -128,13 +135,7 @@ func NewServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server
 		}
 	}
 	o := *opts
-	if o.SingleThreaded {
-		fs = NewLockingRawFileSystem(fs)
-	}
 
-	if o.Buffers == nil {
-		o.Buffers = defaultBufferPool
-	}
 	if o.MaxWrite < 0 {
 		o.MaxWrite = 0
 	}
@@ -169,7 +170,11 @@ func NewServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server
 		singleReader: runtime.GOOS == "darwin",
 		ready:        make(chan error, 1),
 	}
-	ms.reqPool.New = func() interface{} { return new(request) }
+	ms.reqPool.New = func() interface{} {
+		return &request{
+			cancel: make(chan struct{}),
+		}
+	}
 	ms.readPool.New = func() interface{} { return make([]byte, o.MaxWrite+pageSize) }
 
 	mountPoint = filepath.Clean(mountPoint)
@@ -281,6 +286,13 @@ func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
 	gobbled := req.setInput(dest[:n])
 
 	ms.reqMu.Lock()
+	defer ms.reqMu.Unlock()
+	// Must parse request.Unique under lock
+	if status := req.parseHeader(); !status.Ok() {
+		return nil, status
+	}
+	req.inflightIndex = len(ms.reqInflight)
+	ms.reqInflight = append(ms.reqInflight, req)
 	if !gobbled {
 		ms.readPool.Put(dest)
 		dest = nil
@@ -290,17 +302,33 @@ func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
 		ms.loops.Add(1)
 		go ms.loop(true)
 	}
-	ms.reqMu.Unlock()
 
 	return req, OK
 }
 
 // returnRequest returns a request to the pool of unused requests.
 func (ms *Server) returnRequest(req *request) {
+	ms.reqMu.Lock()
+	this := req.inflightIndex
+	last := len(ms.reqInflight) - 1
+
+	if last != this {
+		ms.reqInflight[this] = ms.reqInflight[last]
+		ms.reqInflight[this].inflightIndex = this
+	}
+	ms.reqInflight = ms.reqInflight[:last]
+	interrupted := req.interrupted
+	ms.reqMu.Unlock()
+
 	ms.recordStats(req)
+	if interrupted {
+		// Don't reposses data, because someone might still
+		// be looking at it
+		return
+	}
 
 	if req.bufferPoolOutputBuf != nil {
-		ms.opts.Buffers.FreeBuffer(req.bufferPoolOutputBuf)
+		ms.buffers.FreeBuffer(req.bufferPoolOutputBuf)
 		req.bufferPoolOutputBuf = nil
 	}
 
@@ -351,6 +379,11 @@ func (ms *Server) Serve() {
 		reading.st = ENODEV
 		close(reading.ready)
 	}
+}
+
+// Wait waits for the serve loop to exit
+func (ms *Server) Wait() {
+	ms.loops.Wait()
 }
 
 func (ms *Server) handleInit() Status {
@@ -406,6 +439,11 @@ exit:
 }
 
 func (ms *Server) handleRequest(req *request) Status {
+	if ms.opts.SingleThreaded {
+		ms.requestProcessingMu.Lock()
+		defer ms.requestProcessingMu.Unlock()
+	}
+
 	req.parse()
 	if req.handler == nil {
 		req.status = ENOSYS
@@ -446,9 +484,9 @@ func (ms *Server) allocOut(req *request, size uint32) []byte {
 		return req.bufferPoolOutputBuf
 	}
 	if req.bufferPoolOutputBuf != nil {
-		ms.opts.Buffers.FreeBuffer(req.bufferPoolOutputBuf)
+		ms.buffers.FreeBuffer(req.bufferPoolOutputBuf)
 	}
-	req.bufferPoolOutputBuf = ms.opts.Buffers.AllocBuffer(size)
+	req.bufferPoolOutputBuf = ms.buffers.AllocBuffer(size)
 	return req.bufferPoolOutputBuf
 }
 
@@ -457,6 +495,10 @@ func (ms *Server) write(req *request) Status {
 	switch req.inHeader.Opcode {
 	case _OP_FORGET, _OP_BATCH_FORGET, _OP_NOTIFY_REPLY:
 		return OK
+	case _OP_INTERRUPT:
+		if req.status.Ok() {
+			return OK
+		}
 	}
 
 	header := req.serializeHeader(req.flatDataSize())
@@ -768,7 +810,7 @@ func (ms *Server) EntryNotify(parent uint64, name string) Status {
 // SupportsVersion returns true if the kernel supports the given
 // protocol version or newer.
 func (in *InitIn) SupportsVersion(maj, min uint32) bool {
-	return in.Major >= maj || (in.Major == maj && in.Minor >= min)
+	return in.Major > maj || (in.Major == maj && in.Minor >= min)
 }
 
 // SupportsNotify returns whether a certain notification type is
@@ -785,12 +827,6 @@ func (in *InitIn) SupportsNotify(notifyType int) bool {
 		return in.SupportsVersion(7, 18)
 	}
 	return false
-}
-
-var defaultBufferPool BufferPool
-
-func init() {
-	defaultBufferPool = NewBufferPool()
 }
 
 // WaitMount waits for the first request to be served. Use this to

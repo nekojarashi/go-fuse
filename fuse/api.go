@@ -130,9 +130,6 @@ type MountOptions struct {
 	// interested in security labels.
 	IgnoreSecurityLabels bool // ignoring labels should be provided as a fusermount mount option.
 
-	// If given, use this buffer pool instead of the global one.
-	Buffers BufferPool
-
 	// If RememberInodes is set, we will never forget inodes.
 	// This may be useful for NFS.
 	RememberInodes bool
@@ -157,6 +154,10 @@ type MountOptions struct {
 	// If set, ask kernel to forward file locks to FUSE. If using,
 	// you must implement the GetLk/SetLk/SetLkw methods.
 	EnableLocks bool
+
+	// If set, ask kernel not to do automatic data cache invalidation.
+	// The filesystem is fully responsible for invalidating data cache.
+	ExplicitDataCacheControl bool
 }
 
 // RawFileSystem is an interface close to the FUSE wire protocol.
@@ -171,6 +172,19 @@ type MountOptions struct {
 // each method in separate goroutine.
 //
 // A null implementation is provided by NewDefaultRawFileSystem.
+//
+// After a successful FUSE API call returns, you may not read input or
+// write output data: for performance reasons, memory is reused for
+// following requests, and reading/writing the request data will lead
+// to race conditions.  If you spawn a background routine from a FUSE
+// API call, any incoming request data it wants to reference should be
+// copied over.
+//
+// If a FUSE API call is canceled (which is signaled by closing the
+// `cancel` channel), the API call should return EINTR. In this case,
+// the outstanding request data is not reused, so the API call may
+// return EINTR without ensuring that child contexts have successfully
+// completed.
 type RawFileSystem interface {
 	String() string
 
@@ -181,7 +195,7 @@ type RawFileSystem interface {
 	// about a file inside a directory. Many lookup calls can
 	// occur in parallel, but only one call happens for each (dir,
 	// name) pair.
-	Lookup(header *InHeader, name string, out *EntryOut) (status Status)
+	Lookup(cancel <-chan struct{}, header *InHeader, name string, out *EntryOut) (status Status)
 
 	// Forget is called when the kernel discards entries from its
 	// dentry cache. This happens on unmount, and when the kernel
@@ -192,53 +206,66 @@ type RawFileSystem interface {
 	Forget(nodeid, nlookup uint64)
 
 	// Attributes.
-	GetAttr(input *GetAttrIn, out *AttrOut) (code Status)
-	SetAttr(input *SetAttrIn, out *AttrOut) (code Status)
+	GetAttr(cancel <-chan struct{}, input *GetAttrIn, out *AttrOut) (code Status)
+	SetAttr(cancel <-chan struct{}, input *SetAttrIn, out *AttrOut) (code Status)
 
 	// Modifying structure.
-	Mknod(input *MknodIn, name string, out *EntryOut) (code Status)
-	Mkdir(input *MkdirIn, name string, out *EntryOut) (code Status)
-	Unlink(header *InHeader, name string) (code Status)
-	Rmdir(header *InHeader, name string) (code Status)
-	Rename(input *RenameIn, oldName string, newName string) (code Status)
-	Link(input *LinkIn, filename string, out *EntryOut) (code Status)
+	Mknod(cancel <-chan struct{}, input *MknodIn, name string, out *EntryOut) (code Status)
+	Mkdir(cancel <-chan struct{}, input *MkdirIn, name string, out *EntryOut) (code Status)
+	Unlink(cancel <-chan struct{}, header *InHeader, name string) (code Status)
+	Rmdir(cancel <-chan struct{}, header *InHeader, name string) (code Status)
+	Rename(cancel <-chan struct{}, input *RenameIn, oldName string, newName string) (code Status)
+	Link(cancel <-chan struct{}, input *LinkIn, filename string, out *EntryOut) (code Status)
 
-	Symlink(header *InHeader, pointedTo string, linkName string, out *EntryOut) (code Status)
-	Readlink(header *InHeader) (out []byte, code Status)
-	Access(input *AccessIn) (code Status)
+	Symlink(cancel <-chan struct{}, header *InHeader, pointedTo string, linkName string, out *EntryOut) (code Status)
+	Readlink(cancel <-chan struct{}, header *InHeader) (out []byte, code Status)
+	Access(cancel <-chan struct{}, input *AccessIn) (code Status)
 
 	// Extended attributes.
-	GetXAttrSize(header *InHeader, attr string) (sz int, code Status)
-	GetXAttrData(header *InHeader, attr string) (data []byte, code Status)
-	ListXAttr(header *InHeader) (attributes []byte, code Status)
-	SetXAttr(input *SetXAttrIn, attr string, data []byte) Status
-	RemoveXAttr(header *InHeader, attr string) (code Status)
+
+	// GetXAttr reads an extended attribute, and should return the
+	// number of bytes. If the buffer is too small, return ERANGE,
+	// with the required buffer size.
+	GetXAttr(cancel <-chan struct{}, header *InHeader, attr string, dest []byte) (sz uint32, code Status)
+
+	// ListXAttr lists extended attributes as '\0' delimited byte
+	// slice, and return the number of bytes. If the buffer is too
+	// small, return ERANGE, with the required buffer size.
+	ListXAttr(cancel <-chan struct{}, header *InHeader, dest []byte) (uint32, Status)
+
+	// SetAttr writes an extended attribute.
+	SetXAttr(cancel <-chan struct{}, input *SetXAttrIn, attr string, data []byte) Status
+
+	// RemoveXAttr removes an extended attribute.
+	RemoveXAttr(cancel <-chan struct{}, header *InHeader, attr string) (code Status)
 
 	// File handling.
-	Create(input *CreateIn, name string, out *CreateOut) (code Status)
-	Open(input *OpenIn, out *OpenOut) (status Status)
-	Read(input *ReadIn, buf []byte) (ReadResult, Status)
+	Create(cancel <-chan struct{}, input *CreateIn, name string, out *CreateOut) (code Status)
+	Open(cancel <-chan struct{}, input *OpenIn, out *OpenOut) (status Status)
+	Read(cancel <-chan struct{}, input *ReadIn, buf []byte) (ReadResult, Status)
+	Lseek(cancel <-chan struct{}, in *LseekIn, out *LseekOut) Status
 
 	// File locking
-	GetLk(input *LkIn, out *LkOut) (code Status)
-	SetLk(input *LkIn) (code Status)
-	SetLkw(input *LkIn) (code Status)
+	GetLk(cancel <-chan struct{}, input *LkIn, out *LkOut) (code Status)
+	SetLk(cancel <-chan struct{}, input *LkIn) (code Status)
+	SetLkw(cancel <-chan struct{}, input *LkIn) (code Status)
 
-	Release(input *ReleaseIn)
-	Write(input *WriteIn, data []byte) (written uint32, code Status)
-	Flush(input *FlushIn) Status
-	Fsync(input *FsyncIn) (code Status)
-	Fallocate(input *FallocateIn) (code Status)
+	Release(cancel <-chan struct{}, input *ReleaseIn)
+	Write(cancel <-chan struct{}, input *WriteIn, data []byte) (written uint32, code Status)
+	CopyFileRange(cancel <-chan struct{}, input *CopyFileRangeIn) (written uint32, code Status)
+
+	Flush(cancel <-chan struct{}, input *FlushIn) Status
+	Fsync(cancel <-chan struct{}, input *FsyncIn) (code Status)
+	Fallocate(cancel <-chan struct{}, input *FallocateIn) (code Status)
 
 	// Directory handling
-	OpenDir(input *OpenIn, out *OpenOut) (status Status)
-	ReadDir(input *ReadIn, out *DirEntryList) Status
-	ReadDirPlus(input *ReadIn, out *DirEntryList) Status
+	OpenDir(cancel <-chan struct{}, input *OpenIn, out *OpenOut) (status Status)
+	ReadDir(cancel <-chan struct{}, input *ReadIn, out *DirEntryList) Status
+	ReadDirPlus(cancel <-chan struct{}, input *ReadIn, out *DirEntryList) Status
 	ReleaseDir(input *ReleaseIn)
-	FsyncDir(input *FsyncIn) (code Status)
+	FsyncDir(cancel <-chan struct{}, input *FsyncIn) (code Status)
 
-	//
-	StatFs(input *InHeader, out *StatfsOut) (code Status)
+	StatFs(cancel <-chan struct{}, input *InHeader, out *StatfsOut) (code Status)
 
 	// This is called on processing the first request. The
 	// filesystem implementation can use the server argument to
